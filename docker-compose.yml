@@ -1,0 +1,69 @@
+services:
+    api:
+        build:
+            context: .
+            dockerfile: Dockerfile
+
+        container_name: homflo-api
+
+        restart: unless-stopped
+
+        ports:
+            - "8000:80"
+
+        environment:
+            APP_ENV: local
+            APP_DEBUG: "true"
+
+            DB_CONNECTION: pgsql
+            DB_HOST: postgres
+            DB_PORT: 5432
+            DB_DATABASE: homflo_db
+            DB_USERNAME: homflo
+            DB_PASSWORD: homflo_secret
+
+        volumes:
+            - .:/app
+            - laravel_vendor:/app/vendor
+
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+        networks:
+            - homflo
+
+    postgres:
+        image: postgres:18
+
+        container_name: homflo-postgres
+
+        restart: unless-stopped
+
+        environment:
+            POSTGRES_DB: homflo_db
+            POSTGRES_USER: homflo
+            POSTGRES_PASSWORD: homflo_secret
+
+        ports:
+            - "5432:5432"
+
+        volumes:
+            - postgres_data:/var/lib/postgresql
+
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U homflo -d homflo_db"]
+            interval: 10s
+            timeout: 5s
+            retries: 15
+            start_period: 30s
+
+        networks:
+            - homflo
+
+networks:
+    homflo:
+
+volumes:
+    postgres_data:
+    laravel_vendor:
