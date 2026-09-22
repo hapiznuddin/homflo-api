@@ -15,4 +15,9 @@ class HouseholdMemberRepository implements HouseholdMemberRepositoryInterface
             ->where('user_id', $user->id)
             ->first();
     }
+
+    public function create(array $data): HouseholdMember
+    {
+        return HouseholdMember::query()->create($data);
+    }
 }
