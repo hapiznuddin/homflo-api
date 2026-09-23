@@ -4,6 +4,29 @@ use App\Models\User;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Repositories\UserRepository;
 
+beforeEach(function () {
+    $this->withCredentials()
+        ->withHeader('Origin', 'http://localhost:8000');
+
+    $csrf = $this->get('/sanctum/csrf-cookie');
+
+    $csrf->assertNoContent();
+
+    foreach ($csrf->headers->getCookies() as $cookie) {
+        if ($cookie->getName() === 'XSRF-TOKEN') {
+            $this->withCookie(
+                'XSRF-TOKEN',
+                $cookie->getValue()
+            );
+
+            $this->withHeader(
+                'X-XSRF-TOKEN',
+                urldecode($cookie->getValue())
+            );
+        }
+    }
+});
+
 describe('Registration', function () {
     test('registers a new user with all required fields', function () {
         $response = $this->postJson('/register', [

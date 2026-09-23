@@ -19,8 +19,36 @@ function freshHomfloRequest(): void
     app('auth')->forgetGuards();
 }
 
+function withHomfloCsrf(object $testCase): void
+{
+    $response = $testCase->get('/sanctum/csrf-cookie');
+
+    $response->assertNoContent();
+
+    foreach ($response->headers->getCookies() as $cookie) {
+        if ($cookie->getName() === 'XSRF-TOKEN') {
+            $testCase->withCookie(
+                'XSRF-TOKEN',
+                $cookie->getValue()
+            );
+
+            $testCase->withHeader(
+                'X-XSRF-TOKEN',
+                urldecode($cookie->getValue())
+            );
+
+            return;
+        }
+    }
+
+    throw new RuntimeException('XSRF-TOKEN cookie was not returned.');
+}
+
 beforeEach(function () {
-    $this->withCredentials();
+    $this->withCredentials()
+        ->withHeader('Origin', 'http://localhost:8000');
+
+    withHomfloCsrf($this);
 });
 
 describe('Authentication lifecycle', function () {
@@ -145,8 +173,10 @@ describe('Authentication lifecycle', function () {
         $login = $this->postJson('/login', [
             'email' => $user->email,
             'password' => 'password',
-        ])->assertOk();
+            ])->assertOk();
         syncHomfloSessionCookie($this, $login);
+
+        withHomfloCsrf($this);
 
         $this->postJson('/logout')->assertNoContent();
         $this->assertGuest();
@@ -162,6 +192,7 @@ describe('Authentication lifecycle', function () {
         syncHomfloSessionCookie($this, $login);
         freshHomfloRequest();
 
+        withHomfloCsrf($this);
         // Control: the session cookie genuinely authenticates a fresh request.
         $this->getJson('/api/me')->assertOk();
         freshHomfloRequest();
@@ -185,10 +216,14 @@ describe('Authentication lifecycle', function () {
         syncHomfloSessionCookie($this, $login);
         freshHomfloRequest();
 
+        withHomfloCsrf($this);
+
         $logout = $this->postJson('/logout');
         $logout->assertNoContent();
         syncHomfloSessionCookie($this, $logout);
         freshHomfloRequest();
+
+        withHomfloCsrf($this);
 
         $this->postJson('/api/households', ['name' => 'Rumah Hapiz'])
             ->assertUnauthorized();
@@ -204,10 +239,14 @@ describe('Authentication lifecycle', function () {
         ])->assertOk();
         syncHomfloSessionCookie($this, $login);
 
+        withHomfloCsrf($this);
+
         $logout = $this->postJson('/logout');
         $logout->assertNoContent();
         $this->assertGuest();
         freshHomfloRequest();
+
+        withHomfloCsrf($this);
 
         $secondLogin = $this->postJson('/login', [
             'email' => $otherUser->email,
@@ -235,9 +274,13 @@ describe('Authentication lifecycle', function () {
         ])->assertSuccessful();
 
         // Registration authenticates the user; log out before exercising login.
+        withHomfloCsrf($this);
+
         $this->postJson('/logout')->assertNoContent();
         $this->assertGuest();
         freshHomfloRequest();
+
+        withHomfloCsrf($this);
 
         $login = $this->postJson('/login', [
             'email' => 'lifecycle@example.com',
@@ -252,6 +295,8 @@ describe('Authentication lifecycle', function () {
         $meResponse->assertJsonPath('data.user.email', 'lifecycle@example.com');
         $meResponse->assertJsonPath('data.onboarding.required', true);
         freshHomfloRequest();
+
+        withHomfloCsrf($this);
 
         $logout = $this->postJson('/logout');
         $logout->assertNoContent();
