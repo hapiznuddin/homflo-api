@@ -3,6 +3,7 @@
 namespace App\Models;
 
 // use Database\Factories\UserFactory;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
@@ -13,7 +14,7 @@ use Illuminate\Notifications\Notifiable;
 
 #[Fillable(['username', 'name', 'email', 'password'])]
 #[Hidden(['password', 'remember_token', 'two_factor_recovery_codes', 'two_factor_secret'])]
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmail
 {
     // /** @use HasFactory<UserFactory> */
     use HasFactory, HasUlids, Notifiable;

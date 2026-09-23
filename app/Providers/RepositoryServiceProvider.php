@@ -2,10 +2,12 @@
 
 namespace App\Providers;
 
+use App\Repositories\Contracts\HouseholdInvitationRepositoryInterface;
 use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
 use App\Repositories\Contracts\HouseholdRepositoryInterface;
 use App\Repositories\Contracts\OAuthAccountRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
+use App\Repositories\HouseholdInvitationRepository;
 use App\Repositories\HouseholdMemberRepository;
 use App\Repositories\HouseholdRepository;
 use App\Repositories\OAuthAccountRepository;
@@ -34,6 +36,10 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             HouseholdRepositoryInterface::class,
             HouseholdRepository::class,
+        );
+        $this->app->bind(
+            HouseholdInvitationRepositoryInterface::class,
+            HouseholdInvitationRepository::class,
         );
     }
 

@@ -39,6 +39,26 @@ class HouseholdPolicy
     }
 
     /**
+     * Determine whether the user can list household members.
+     *
+     * Any household member (owner or member) may list.
+     */
+    public function viewMembers(User $user, Household $household): bool
+    {
+        return $this->membership($user, $household) !== null;
+    }
+
+    /**
+     * Determine whether the user can manage household members.
+     *
+     * Only the owner may change roles or remove members.
+     */
+    public function manageMembers(User $user, Household $household): bool
+    {
+        return $this->membership($user, $household)?->role === 'owner';
+    }
+
+    /**
      * Resolve membership from server-side data only.
      *
      * Never trust user_id, household_id, or role from client input.

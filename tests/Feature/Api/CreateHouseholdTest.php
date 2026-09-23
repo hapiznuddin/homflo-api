@@ -7,6 +7,7 @@ use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
 use App\Repositories\Contracts\HouseholdRepositoryInterface;
 use App\Repositories\HouseholdRepository;
 use App\Services\Household\HouseholdService;
+use Illuminate\Database\Eloquent\Collection;
 
 describe('POST /api/households', function () {
     test('returns 401 for unauthenticated request', function () {
@@ -159,6 +160,36 @@ describe('POST /api/households', function () {
             public function create(array $data): HouseholdMember
             {
                 throw new RuntimeException('membership failed');
+            }
+
+            public function listForHousehold(Household $household): Collection
+            {
+                throw new RuntimeException('not implemented in test double');
+            }
+
+            public function findByIdForHousehold(Household $household, string $memberId): ?HouseholdMember
+            {
+                throw new RuntimeException('not implemented in test double');
+            }
+
+            public function findByHouseholdAndUser(Household $household, User $user): ?HouseholdMember
+            {
+                throw new RuntimeException('not implemented in test double');
+            }
+
+            public function updateRole(HouseholdMember $membership, string $role): HouseholdMember
+            {
+                throw new RuntimeException('not implemented in test double');
+            }
+
+            public function delete(HouseholdMember $membership): void
+            {
+                throw new RuntimeException('not implemented in test double');
+            }
+
+            public function countOwnersForHousehold(Household $household): int
+            {
+                throw new RuntimeException('not implemented in test double');
             }
         };
 

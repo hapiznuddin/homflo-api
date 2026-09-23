@@ -173,7 +173,7 @@ describe('Authentication lifecycle', function () {
         $login = $this->postJson('/login', [
             'email' => $user->email,
             'password' => 'password',
-            ])->assertOk();
+        ])->assertOk();
         syncHomfloSessionCookie($this, $login);
 
         withHomfloCsrf($this);
