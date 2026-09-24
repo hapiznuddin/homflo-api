@@ -16,7 +16,7 @@ class UserRepository implements UserRepositoryInterface
     public function findByEmail(string $email): ?User
     {
         return User::query()
-            ->where('email', $email)
+            ->whereRaw('LOWER(email) = ?', [mb_strtolower($email, 'UTF-8')])
             ->first();
     }
 
