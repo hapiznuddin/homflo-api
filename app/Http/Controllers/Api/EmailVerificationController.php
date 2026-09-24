@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Exceptions\EmailVerificationMismatchException;
+use App\Exceptions\VerificationUserNotFoundException;
 use App\Http\Controllers\Controller;
 use App\Services\Auth\EmailVerificationService;
 use Illuminate\Http\JsonResponse;
@@ -39,10 +40,18 @@ class EmailVerificationController extends Controller
         ], 202);
     }
 
-    public function verify(Request $request, string $id, string $hash): JsonResponse
+    public function verify(string $id, string $hash): JsonResponse
     {
         try {
-            $verified = $this->verificationService->verify($request->user(), $id, $hash);
+            $verified = $this->verificationService->verify($id, $hash);
+        } catch (VerificationUserNotFoundException $exception) {
+            return response()->json([
+                'success' => false,
+                'error' => [
+                    'code' => 'USER_NOT_FOUND',
+                    'message' => $exception->getMessage(),
+                ],
+            ], 404);
         } catch (EmailVerificationMismatchException $exception) {
             return response()->json([
                 'success' => false,

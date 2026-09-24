@@ -56,6 +56,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Frontend URL
+    |--------------------------------------------------------------------------
+    |
+    | Base URL of the Homflo frontend (Nuxt). Used for user-facing links
+    | sent by email, such as the password reset link. The frontend does
+    | not exist yet, so this is a destination placeholder the future
+    | Nuxt application will consume (token + email).
+    |
+    */
+
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

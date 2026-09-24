@@ -6,8 +6,10 @@ use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
 use App\Actions\Fortify\UpdateUserPassword;
 use App\Actions\Fortify\UpdateUserProfileInformation;
+use Illuminate\Auth\Events\Registered;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
@@ -51,6 +53,15 @@ class FortifyServiceProvider extends ServiceProvider
             return Limit::perMinute(10)->by(
                 ($credentialId ?: $request->session()->getId()).'|'.$request->ip()
             );
+        });
+
+        // Homflo product decision: email verification is user-initiated via
+        // POST /api/email/verification-notification. Registration must not
+        // auto-send the verification notification. The framework registers
+        // the default Registered listener in a booted callback, so this
+        // removal runs in our own booted callback to execute afterwards.
+        $this->app->booted(function (): void {
+            Event::forget(Registered::class);
         });
     }
 }

@@ -64,6 +64,19 @@ describe('Household invitations', function () {
         ]);
     });
 
+    test('only token hash is persisted, never the raw token', function () {
+        $owner = User::factory()->create();
+        $household = invSetupHousehold($owner);
+        $invited = User::factory()->create();
+
+        $created = invInvite($this, $owner, $household, $invited->email);
+
+        $stored = HouseholdInvitation::find($created['id']);
+
+        expect($stored->token_hash)->not->toBe($created['token'])
+            ->and($stored->token_hash)->toBe(hash('sha256', $created['token']));
+    });
+
     test('member cannot create invitation', function () {
         $owner = User::factory()->create();
         $household = invSetupHousehold($owner);

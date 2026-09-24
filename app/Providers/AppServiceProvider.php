@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Models\Household;
 use App\Policies\HouseholdPolicy;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Auth\Notifications\VerifyEmail;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\URL;
@@ -35,6 +36,12 @@ class AppServiceProvider extends ServiceProvider
                     'hash' => sha1($notifiable->getEmailForVerification()),
                 ]
             );
+        });
+
+        ResetPassword::createUrlUsing(function (object $notifiable, string $token) {
+            return rtrim((string) config('app.frontend_url'), '/')
+                .'/reset-password/'.$token
+                .'?'.http_build_query(['email' => $notifiable->getEmailForPasswordReset()]);
         });
     }
 }

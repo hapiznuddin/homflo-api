@@ -3,11 +3,17 @@
 namespace App\Services\Auth;
 
 use App\Exceptions\EmailVerificationMismatchException;
+use App\Exceptions\VerificationUserNotFoundException;
 use App\Models\User;
+use App\Repositories\Contracts\UserRepositoryInterface;
 use Illuminate\Auth\Events\Verified;
 
 class EmailVerificationService
 {
+    public function __construct(
+        private readonly UserRepositoryInterface $users,
+    ) {}
+
     /**
      * Send the verification notification to the user.
      */
@@ -17,18 +23,24 @@ class EmailVerificationService
     }
 
     /**
-     * Mark the authenticated user's email as verified.
+     * Mark the email as verified for the user identified by the signed route id.
      *
-     * The signed middleware guarantees URL integrity and expiry; this method
-     * binds the link to the authenticated user server-side.
+     * No authenticated session is required: the signed middleware guarantees
+     * URL integrity and expiry, and this method binds the link to the user
+     * resolved server-side from the route id.
      *
+     * @throws VerificationUserNotFoundException
      * @throws EmailVerificationMismatchException
      */
-    public function verify(User $user, string $id, string $hash): bool
+    public function verify(string $id, string $hash): bool
     {
-        if ((string) $user->getKey() !== (string) $id
-            || ! hash_equals(sha1($user->getEmailForVerification()), (string) $hash)
-        ) {
+        $user = $this->users->findById((string) $id);
+
+        if ($user === null) {
+            throw new VerificationUserNotFoundException;
+        }
+
+        if (! hash_equals(sha1($user->getEmailForVerification()), (string) $hash)) {
             throw new EmailVerificationMismatchException;
         }
 

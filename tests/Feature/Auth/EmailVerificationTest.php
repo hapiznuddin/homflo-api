@@ -4,6 +4,7 @@ use App\Models\User;
 use Illuminate\Auth\Notifications\VerifyEmail;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
 
 function evSignedUrl(User $user, ?string $hash = null, ?DateTimeInterface $expires = null): string
 {
@@ -31,6 +32,37 @@ describe('Email verification', function () {
             'email' => 'verify@example.com',
             'email_verified_at' => null,
         ]);
+    });
+
+    test('registration does NOT send verification notification', function () {
+        Notification::fake();
+
+        $this->postJson('/register', [
+            'username' => 'noautouser',
+            'name' => 'No Auto User',
+            'email' => 'noauto@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertSuccessful();
+
+        Notification::assertNothingSent();
+    });
+
+    test('newly registered user can login normally while unverified', function () {
+        $this->postJson('/register', [
+            'username' => 'plainlogin',
+            'name' => 'Plain Login',
+            'email' => 'plainlogin@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertSuccessful();
+
+        $this->postJson('/logout')->assertNoContent();
+
+        $this->postJson('/login', [
+            'email' => 'plainlogin@example.com',
+            'password' => 'password123',
+        ])->assertOk();
     });
 
     test('me exposes unverified state', function () {
@@ -115,12 +147,14 @@ describe('Email verification', function () {
         $user = User::factory()->unverified()->create();
         $other = User::factory()->unverified()->create();
 
+        // A valid link for $user verifies $user even when another user is
+        // logged in; the logged-in account itself must stay unverified.
         $response = $this->actingAs($other)->getJson(evSignedUrl($user));
 
-        $response->assertForbidden();
-        $response->assertJsonPath('error.code', 'FORBIDDEN');
+        $response->assertOk();
+        $response->assertJsonPath('success', true);
 
-        expect($user->fresh()->email_verified_at)->toBeNull()
+        expect($user->fresh()->email_verified_at)->not->toBeNull()
             ->and($other->fresh()->email_verified_at)->toBeNull();
     });
 
@@ -193,11 +227,101 @@ describe('Email verification', function () {
         $verify->assertJsonMissing(['token', 'token_hash']);
     });
 
-    test('guest cannot verify email', function () {
+    test('guest with tampered signature is still rejected', function () {
         $user = User::factory()->unverified()->create();
 
-        $this->getJson(evSignedUrl($user))->assertUnauthorized();
+        $this->getJson(evSignedUrl($user).'tampered')->assertForbidden();
 
         expect($user->fresh()->email_verified_at)->toBeNull();
+    });
+});
+
+describe('Email verification without session', function () {
+    test('verification succeeds WITHOUT authenticated Sanctum user', function () {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->getJson(evSignedUrl($user));
+
+        $response->assertOk();
+        $response->assertJsonPath('success', true);
+        $response->assertJsonPath('data.verified', true);
+
+        expect($user->fresh()->email_verified_at)->not->toBeNull();
+    });
+
+    test('verification URL for user A cannot verify user B', function () {
+        $userA = User::factory()->unverified()->create();
+        $userB = User::factory()->unverified()->create();
+
+        $response = $this->getJson(evSignedUrl($userA));
+
+        $response->assertOk();
+
+        expect($userA->fresh()->email_verified_at)->not->toBeNull()
+            ->and($userB->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('wrong hash with valid signature is rejected without session', function () {
+        $userA = User::factory()->unverified()->create();
+        $userB = User::factory()->unverified()->create();
+
+        $url = URL::temporarySignedRoute(
+            'api.verification.verify',
+            now()->addMinutes(60),
+            ['id' => $userA->getKey(), 'hash' => sha1($userB->email)]
+        );
+
+        $response = $this->getJson($url);
+
+        $response->assertForbidden();
+        $response->assertJsonPath('success', false);
+        $response->assertJsonPath('error.code', 'FORBIDDEN');
+
+        expect($userA->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('invalid signature is rejected without session', function () {
+        $user = User::factory()->unverified()->create();
+
+        $this->getJson(evSignedUrl($user).'tampered')->assertForbidden();
+
+        expect($user->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('expired signature is rejected without session', function () {
+        $user = User::factory()->unverified()->create();
+
+        $this->getJson(evSignedUrl($user, null, now()->subMinutes(5)))->assertForbidden();
+
+        expect($user->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('nonexistent user is rejected without leaking data', function () {
+        $url = URL::temporarySignedRoute(
+            'api.verification.verify',
+            now()->addMinutes(60),
+            ['id' => (string) Str::ulid(), 'hash' => sha1('nobody@example.com')]
+        );
+
+        $response = $this->getJson($url);
+
+        $response->assertNotFound();
+        $response->assertJsonPath('success', false);
+        $response->assertJsonPath('error.code', 'USER_NOT_FOUND');
+    });
+
+    test('verification is idempotent without session', function () {
+        $user = User::factory()->unverified()->create();
+
+        $this->getJson(evSignedUrl($user))->assertOk();
+
+        $firstVerifiedAt = $user->fresh()->email_verified_at;
+
+        $response = $this->getJson(evSignedUrl($user));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.verified', true);
+
+        expect($user->fresh()->email_verified_at)->toEqual($firstVerifiedAt);
     });
 });

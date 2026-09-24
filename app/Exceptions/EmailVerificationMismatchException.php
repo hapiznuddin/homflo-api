@@ -6,7 +6,7 @@ use RuntimeException;
 
 class EmailVerificationMismatchException extends RuntimeException
 {
-    public function __construct(string $message = 'Verification link does not belong to the authenticated user.')
+    public function __construct(string $message = 'Verification link is not valid for this user.')
     {
         parent::__construct($message);
     }

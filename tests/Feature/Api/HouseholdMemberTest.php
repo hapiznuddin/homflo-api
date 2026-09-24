@@ -380,4 +380,50 @@ describe('Household members', function () {
             "/api/households/{$household->id}/members/{$membership->id}"
         )->assertUnauthorized();
     });
+
+    test('membership id from another household cannot be updated', function () {
+        $ownerA = User::factory()->create();
+        $householdA = makeHomfloHousehold($ownerA, 'Home A');
+        $ownerB = User::factory()->create();
+        $householdB = makeHomfloHousehold($ownerB, 'Home B');
+        $memberB = addHomfloMember($householdB);
+        $foreignMembership = HouseholdMember::query()
+            ->where('household_id', $householdB->id)
+            ->where('user_id', $memberB->id)
+            ->firstOrFail();
+
+        $response = $this->actingAs($ownerA)->patchJson(
+            "/api/households/{$householdA->id}/members/{$foreignMembership->id}",
+            ['role' => 'owner']
+        );
+
+        $response->assertNotFound();
+        $response->assertJsonPath('error.code', 'MEMBERSHIP_NOT_FOUND');
+
+        $this->assertDatabaseHas('household_members', [
+            'id' => $foreignMembership->id,
+            'role' => 'member',
+        ]);
+    });
+
+    test('membership id from another household cannot be deleted', function () {
+        $ownerA = User::factory()->create();
+        $householdA = makeHomfloHousehold($ownerA, 'Home A');
+        $ownerB = User::factory()->create();
+        $householdB = makeHomfloHousehold($ownerB, 'Home B');
+        $memberB = addHomfloMember($householdB);
+        $foreignMembership = HouseholdMember::query()
+            ->where('household_id', $householdB->id)
+            ->where('user_id', $memberB->id)
+            ->firstOrFail();
+
+        $response = $this->actingAs($ownerA)->deleteJson(
+            "/api/households/{$householdA->id}/members/{$foreignMembership->id}"
+        );
+
+        $response->assertNotFound();
+        $response->assertJsonPath('error.code', 'MEMBERSHIP_NOT_FOUND');
+
+        $this->assertDatabaseHas('household_members', ['id' => $foreignMembership->id]);
+    });
 });
