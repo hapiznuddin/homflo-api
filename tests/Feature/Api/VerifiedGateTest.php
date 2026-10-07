@@ -65,23 +65,33 @@ describe('Verified gate account access', function () {
 });
 
 describe('Verified gate household creation', function () {
-    test('unverified user cannot create household', function () {
+    test('unverified user can create household', function () {
         $user = User::factory()->unverified()->create();
 
         $response = $this->actingAs($user)->postJson('/api/households', ['name' => 'Rumah Hapiz']);
 
-        $response->assertForbidden();
-        $response->assertJsonPath('success', false);
-        $response->assertJsonPath('error.code', 'EMAIL_NOT_VERIFIED');
+        $response->assertStatus(201);
+        $response->assertJsonPath('success', true);
+        $response->assertJsonPath('data.household.role', 'owner');
     });
 
-    test('no household is created for unverified user', function () {
+    test('household is created for unverified user with owner membership', function () {
         $user = User::factory()->unverified()->create();
 
-        $this->actingAs($user)->postJson('/api/households', ['name' => 'Rumah Hapiz']);
+        $response = $this->actingAs($user)->postJson('/api/households', ['name' => 'Rumah Hapiz']);
 
-        $this->assertDatabaseMissing('households', ['name' => 'Rumah Hapiz']);
-        $this->assertDatabaseMissing('household_members', ['user_id' => $user->id]);
+        $householdId = $response->json('data.household.id');
+
+        $this->assertDatabaseHas('households', [
+            'id' => $householdId,
+            'name' => 'Rumah Hapiz',
+            'created_by' => $user->id,
+        ]);
+        $this->assertDatabaseHas('household_members', [
+            'household_id' => $householdId,
+            'user_id' => $user->id,
+            'role' => 'owner',
+        ]);
     });
 
     test('verified user can create household', function () {
@@ -363,20 +373,35 @@ describe('Verified gate member listing', function () {
 });
 
 describe('Verified gate tampering', function () {
-    test('client payload cannot bypass verification', function () {
+    test('client payload cannot grant privileges on household creation', function () {
         $user = User::factory()->unverified()->create();
+        $other = User::factory()->create();
 
         $response = $this->actingAs($user)->postJson('/api/households', [
             'name' => 'Rumah Hapiz',
-            'user_id' => $user->id,
+            'user_id' => $other->id,
             'household_id' => '01K6W5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5',
-            'role' => 'owner',
-            'email' => $user->email,
+            'role' => 'member',
+            'email' => $other->email,
         ]);
 
-        $response->assertForbidden();
-        $response->assertJsonPath('error.code', 'EMAIL_NOT_VERIFIED');
+        $response->assertStatus(201);
 
-        $this->assertDatabaseMissing('households', ['name' => 'Rumah Hapiz']);
+        $householdId = $response->json('data.household.id');
+
+        // Server-side authority only: authenticated user becomes owner of a
+        // server-generated household regardless of payload.
+        expect($householdId)->not->toBe('01K6W5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5');
+        $response->assertJsonPath('data.household.role', 'owner');
+
+        $this->assertDatabaseHas('household_members', [
+            'household_id' => $householdId,
+            'user_id' => $user->id,
+            'role' => 'owner',
+        ]);
+        $this->assertDatabaseMissing('household_members', [
+            'household_id' => $householdId,
+            'user_id' => $other->id,
+        ]);
     });
 });

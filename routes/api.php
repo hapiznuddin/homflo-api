@@ -26,10 +26,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // blanket verification gate.
     Route::get('/households/{household}/members', [HouseholdMemberController::class, 'index']);
 
-    // Deferred mandatory verification: household activation and mutation
-    // require a verified email before existing policy/business rules apply.
+    // First-household creation is part of onboarding: an authenticated user
+    // may create it before verifying email. Verification remains optional
+    // as an account/profile feature.
+    Route::post('/households', [HouseholdController::class, 'store']);
+
+    // Deferred mandatory verification: household mutation (other than
+    // first-household creation) requires a verified email before existing
+    // policy/business rules apply.
     Route::middleware('verified')->group(function () {
-        Route::post('/households', [HouseholdController::class, 'store']);
         Route::post('/households/{household}/invitations', [HouseholdInvitationController::class, 'store']);
         Route::patch('/households/{household}/members/{member}', [HouseholdMemberController::class, 'update']);
         Route::delete('/households/{household}/members/{member}', [HouseholdMemberController::class, 'destroy']);
