@@ -19,5 +19,7 @@ interface HouseholdInvitationRepositoryInterface
      */
     public function listPendingForEmail(string $email): Collection;
 
+    public function countPendingForHousehold(Household $household): int;
+
     public function markAsAccepted(HouseholdInvitation $invitation): HouseholdInvitation;
 }

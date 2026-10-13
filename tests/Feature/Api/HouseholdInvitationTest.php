@@ -525,6 +525,11 @@ describe('Household invitations', function () {
             {
                 throw new RuntimeException('acceptance failed');
             }
+
+            public function countPendingForHousehold(Household $household): int
+            {
+                return $this->inner->countPendingForHousehold($household);
+            }
         };
 
         app()->instance(HouseholdInvitationRepositoryInterface::class, $failingInvitations);

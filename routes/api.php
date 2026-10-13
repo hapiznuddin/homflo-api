@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\HouseholdController;
 use App\Http\Controllers\Api\HouseholdInvitationController;
@@ -16,6 +17,10 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', MeController::class);
+
+    // Read-only household aggregate. Like /me, it needs no `verified` gate;
+    // missing households surface as 404 so the app can route to onboarding.
+    Route::get('/dashboard', DashboardController::class);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])

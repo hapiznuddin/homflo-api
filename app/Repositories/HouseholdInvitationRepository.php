@@ -52,4 +52,13 @@ class HouseholdInvitationRepository implements HouseholdInvitationRepositoryInte
 
         return $invitation->refresh();
     }
+
+    public function countPendingForHousehold(Household $household): int
+    {
+        return HouseholdInvitation::query()
+            ->where('household_id', $household->id)
+            ->where('status', HouseholdInvitation::STATUS_PENDING)
+            ->where('expires_at', '>', now())
+            ->count();
+    }
 }

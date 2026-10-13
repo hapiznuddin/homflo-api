@@ -27,4 +27,6 @@ interface HouseholdMemberRepositoryInterface
     public function delete(HouseholdMember $membership): void;
 
     public function countOwnersForHousehold(Household $household): int;
+
+    public function countForHousehold(Household $household): int;
 }

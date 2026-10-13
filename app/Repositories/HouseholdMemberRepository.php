@@ -71,4 +71,11 @@ class HouseholdMemberRepository implements HouseholdMemberRepositoryInterface
             ->where('role', 'owner')
             ->count();
     }
+
+    public function countForHousehold(Household $household): int
+    {
+        return HouseholdMember::query()
+            ->where('household_id', $household->id)
+            ->count();
+    }
 }

@@ -191,6 +191,11 @@ describe('POST /api/households', function () {
             {
                 throw new RuntimeException('not implemented in test double');
             }
+
+            public function countForHousehold(Household $household): int
+            {
+                throw new RuntimeException('not implemented in test double');
+            }
         };
 
         app()->instance(HouseholdMemberRepositoryInterface::class, $failingMembers);
