@@ -1,0 +1,52 @@
+<?php
+
+namespace App\Models;
+
+use Database\Factories\AssetFactory;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class Asset extends Model
+{
+    /** @use HasFactory<AssetFactory> */
+    use HasFactory, HasUlids;
+
+    protected $fillable = [
+        'household_id',
+        'name',
+        'description',
+        'location',
+        'acquired_on',
+        'acquisition_cost',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'acquired_on' => 'date',
+            'acquisition_cost' => 'decimal:2',
+        ];
+    }
+
+    public function household(): BelongsTo
+    {
+        return $this->belongsTo(Household::class);
+    }
+
+    public function maintenances(): HasMany
+    {
+        return $this->hasMany(Maintenance::class);
+    }
+
+    /**
+     * @param  Builder<Asset>  $query
+     */
+    public function scopeForHousehold(Builder $query, Household|string $household): void
+    {
+        $query->where('household_id', $household instanceof Household ? $household->id : $household);
+    }
+}
