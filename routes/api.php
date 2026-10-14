@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\InvitationController;
 use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\TransactionController;
 use Illuminate\Support\Facades\Route;
 
 // Route::get('/user', function (Request $request) {
@@ -21,6 +22,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Read-only household aggregate. Like /me, it needs no `verified` gate;
     // missing households surface as 404 so the app can route to onboarding.
     Route::get('/dashboard', DashboardController::class);
+
+    // Transaction ledger reads are available to any household member, like
+    // /me and /dashboard. Recording, changing, and removing ledger rows
+    // mutates shared household data, so writes follow the deferred
+    // mandatory verification rule with the other household mutations.
+    Route::get('/transactions', [TransactionController::class, 'index']);
+    Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -44,6 +52,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/households/{household}/members/{member}', [HouseholdMemberController::class, 'update']);
         Route::delete('/households/{household}/members/{member}', [HouseholdMemberController::class, 'destroy']);
         Route::post('/invitations/{invitation}/accept', [InvitationController::class, 'accept']);
+        Route::post('/transactions', [TransactionController::class, 'store']);
+        Route::patch('/transactions/{transaction}', [TransactionController::class, 'update']);
+        Route::delete('/transactions/{transaction}', [TransactionController::class, 'destroy']);
     });
 });
 

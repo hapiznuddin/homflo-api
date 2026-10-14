@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use App\Models\Household;
+use App\Models\Transaction;
 use App\Policies\HouseholdPolicy;
+use App\Policies\TransactionPolicy;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Auth\Notifications\VerifyEmail;
 use Illuminate\Support\Facades\Gate;
@@ -26,6 +28,7 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Gate::policy(Household::class, HouseholdPolicy::class);
+        Gate::policy(Transaction::class, TransactionPolicy::class);
 
         VerifyEmail::createUrlUsing(function (object $notifiable) {
             return URL::temporarySignedRoute(
