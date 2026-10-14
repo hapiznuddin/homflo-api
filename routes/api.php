@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Api\HouseholdController;
@@ -18,6 +19,12 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', MeController::class);
+
+    // Household catalogue reads are available to any household member,
+    // like /me and /dashboard. Catalogue mutations follow the deferred
+    // mandatory verification rule with the other household mutations.
+    Route::get('/categories', [CategoryController::class, 'index']);
+    Route::get('/categories/{category}', [CategoryController::class, 'show']);
 
     // Read-only household aggregate. Like /me, it needs no `verified` gate;
     // missing households surface as 404 so the app can route to onboarding.
@@ -55,6 +62,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/transactions', [TransactionController::class, 'store']);
         Route::patch('/transactions/{transaction}', [TransactionController::class, 'update']);
         Route::delete('/transactions/{transaction}', [TransactionController::class, 'destroy']);
+        Route::post('/categories', [CategoryController::class, 'store']);
+        Route::patch('/categories/{category}', [CategoryController::class, 'update']);
+        Route::delete('/categories/{category}', [CategoryController::class, 'destroy']);
     });
 });
 
