@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\BudgetController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EmailVerificationController;
@@ -36,6 +37,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // mandatory verification rule with the other household mutations.
     Route::get('/transactions', [TransactionController::class, 'index']);
     Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
+
+    // Budget target reads are available to any household member. Setting,
+    // changing, and removing targets mutates shared household data, so
+    // writes follow the deferred mandatory verification rule.
+    Route::get('/budgets', [BudgetController::class, 'index']);
+    Route::get('/budgets/{budget}', [BudgetController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -65,6 +72,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/categories', [CategoryController::class, 'store']);
         Route::patch('/categories/{category}', [CategoryController::class, 'update']);
         Route::delete('/categories/{category}', [CategoryController::class, 'destroy']);
+        Route::post('/budgets', [BudgetController::class, 'store']);
+        Route::patch('/budgets/{budget}', [BudgetController::class, 'update']);
+        Route::delete('/budgets/{budget}', [BudgetController::class, 'destroy']);
     });
 });
 

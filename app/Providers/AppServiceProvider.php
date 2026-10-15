@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Models\Budget;
 use App\Models\Category;
 use App\Models\Household;
 use App\Models\Transaction;
+use App\Policies\BudgetPolicy;
 use App\Policies\CategoryPolicy;
 use App\Policies\HouseholdPolicy;
 use App\Policies\TransactionPolicy;
@@ -32,6 +34,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Household::class, HouseholdPolicy::class);
         Gate::policy(Transaction::class, TransactionPolicy::class);
         Gate::policy(Category::class, CategoryPolicy::class);
+        Gate::policy(Budget::class, BudgetPolicy::class);
 
         VerifyEmail::createUrlUsing(function (object $notifiable) {
             return URL::temporarySignedRoute(

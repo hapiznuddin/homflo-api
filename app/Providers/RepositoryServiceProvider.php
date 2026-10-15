@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Repositories\BudgetRepository;
 use App\Repositories\CategoryRepository;
+use App\Repositories\Contracts\BudgetRepositoryInterface;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
 use App\Repositories\Contracts\HouseholdInvitationRepositoryInterface;
 use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
@@ -52,6 +54,10 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             CategoryRepositoryInterface::class,
             CategoryRepository::class,
+        );
+        $this->app->bind(
+            BudgetRepositoryInterface::class,
+            BudgetRepository::class,
         );
     }
 
