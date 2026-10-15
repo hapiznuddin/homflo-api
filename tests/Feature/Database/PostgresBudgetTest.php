@@ -109,4 +109,45 @@ describe('postgresql budget constraints', function () {
         expect((string) DB::connection('pgsql')->table('budgets')->where('id', $budgetId)->value('amount'))
             ->toBe('1234567.89');
     });
+
+    test('grouped expense aggregation is exact on real grammar', function () {
+        try {
+            [$householdId, $categoryId] = pgBudgetHousehold();
+        } catch (RuntimeException $exception) {
+            $this->markTestSkipped($exception->getMessage());
+        }
+
+        foreach (['100000.10', '200000.20'] as $amount) {
+            DB::connection('pgsql')->table('transactions')->insert([
+                'id' => (string) Str::ulid(),
+                'household_id' => $householdId,
+                'category_id' => $categoryId,
+                'type' => 'expense',
+                'amount' => $amount,
+                'occurred_on' => '2026-10-05',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        DB::connection('pgsql')->table('transactions')->insert([
+            'id' => (string) Str::ulid(),
+            'household_id' => $householdId,
+            'category_id' => $categoryId,
+            'type' => 'income',
+            'amount' => '9000000.00',
+            'occurred_on' => '2026-10-05',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $total = DB::connection('pgsql')->table('transactions')
+            ->where('household_id', $householdId)
+            ->where('type', 'expense')
+            ->whereDate('occurred_on', '>=', '2026-10-01')
+            ->whereDate('occurred_on', '<=', '2026-10-31')
+            ->sum('amount');
+
+        expect((string) $total)->toBe('300000.30');
+    });
 });

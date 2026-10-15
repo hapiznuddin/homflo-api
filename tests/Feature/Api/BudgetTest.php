@@ -318,11 +318,21 @@ describe('Budgets API validation and persistence', function () {
             'year',
             'month',
             'amount',
+            'actual_spending',
+            'remaining',
+            'usage_percentage',
+            'usage_status',
             'created_at',
             'updated_at',
         ]);
 
-        expect($data)->not->toHaveKeys(['spent', 'spent_amount', 'remaining', 'remaining_amount', 'percent']);
+        expect($data)->not->toHaveKeys(['spent', 'spent_amount', 'remaining_amount', 'percent']);
+        // Fresh period with no transactions yet: honest zeros.
+        expect($data['actual_spending'])->toBe('0.00');
+        expect($data['remaining'])->toBe('1500000.50');
+        // Whole percentages serialize without fraction in JSON.
+        expect((float) $data['usage_percentage'])->toBe(0.0);
+        expect($data['usage_status'])->toBe('normal');
     });
 
     test('duplicate targets are rejected per household, period, and category', function () {
@@ -467,14 +477,36 @@ describe('Budgets API validation and persistence', function () {
         $household = bgHousehold($owner);
 
         for ($i = 0; $i < 5; $i++) {
-            bgRecord($household, bgCategory($household, "Kategori {$i}"), ['month' => $i + 1]);
+            bgRecord($household, bgCategory($household, "Kategori {$i}"), ['month' => 10]);
         }
 
         DB::enableQueryLog();
 
         $this->actingAs($owner)->getJson('/api/budgets')->assertOk();
 
+        // Auth/context (4) + budgets (1) + categories eager (1) + one
+        // grouped SUM for the single distinct period — never per budget.
         expect(count(DB::getQueryLog()))->toBeLessThan(10);
+    });
+
+    test('spending queries scale with distinct periods, not budgets', function () {
+        $owner = User::factory()->create();
+        $household = bgHousehold($owner);
+
+        for ($i = 1; $i <= 6; $i++) {
+            bgRecord($household, bgCategory($household, "Kategori {$i}"), ['month' => $i <= 3 ? 9 : 10]);
+        }
+
+        DB::enableQueryLog();
+
+        $this->actingAs($owner)->getJson('/api/budgets')->assertOk();
+
+        $sums = array_filter(
+            DB::getQueryLog(),
+            fn (array $query) => str_contains($query['query'], 'SUM(amount)'),
+        );
+
+        expect(count($sums))->toBe(2);
     });
 });
 

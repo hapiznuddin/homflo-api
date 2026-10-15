@@ -36,12 +36,24 @@ class BudgetController extends Controller
             return $this->householdNotFound();
         }
 
-        $budgets = $this->budgetService->listForHousehold($household, $request->filters());
+        $result = $this->budgetService->listWithSpending($household, $request->filters());
 
-        return response()->json([
+        $response = [
             'success' => true,
-            'data' => $budgets->map(fn (Budget $budget) => $this->presentBudget($budget))->all(),
-        ]);
+            'data' => $result['items']->map(fn (Budget $budget) => $this->presentBudget(
+                $budget,
+                $this->budgetService->deriveFor($household, $budget, $result['today']),
+            ))->all(),
+        ];
+
+        if ($result['householdTotal'] !== null && $result['period'] !== null) {
+            $response['meta'] = [
+                'period' => $result['period'],
+                'household' => ['actual_spending' => $result['householdTotal']],
+            ];
+        }
+
+        return response()->json($response);
     }
 
     public function store(StoreBudgetRequest $request): JsonResponse
@@ -66,7 +78,7 @@ class BudgetController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $this->presentBudget($budget),
+            'data' => $this->presentBudget($budget, $this->budgetService->deriveFor($household, $budget)),
         ], 201);
     }
 
@@ -82,9 +94,15 @@ class BudgetController extends Controller
             return $this->budgetNotFound();
         }
 
+        $household = $resolved->household;
+
+        if ($household === null) {
+            return $this->budgetNotFound();
+        }
+
         return response()->json([
             'success' => true,
-            'data' => $this->presentBudget($resolved),
+            'data' => $this->presentBudget($resolved, $this->budgetService->deriveFor($household, $resolved)),
         ]);
     }
 
@@ -102,6 +120,10 @@ class BudgetController extends Controller
 
         $household = $resolved->household;
 
+        if ($household === null) {
+            return $this->budgetNotFound();
+        }
+
         try {
             $updated = $this->budgetService->change($household, $resolved, $request->validated());
         } catch (CategoryNotFoundException) {
@@ -112,7 +134,7 @@ class BudgetController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $this->presentBudget($updated),
+            'data' => $this->presentBudget($updated, $this->budgetService->deriveFor($household, $updated)),
         ]);
     }
 
@@ -169,9 +191,10 @@ class BudgetController extends Controller
     }
 
     /**
-     * @return array{id: string, household_id: string, category: ?array{id: string, name: string, icon: ?string}, year: int, month: int, amount: string, created_at: mixed, updated_at: mixed}
+     * @param  array{actual_spending: string, remaining: string, usage_percentage: ?float, usage_status: string}  $derived
+     * @return array{id: string, household_id: string, category: ?array{id: string, name: string, icon: ?string}, year: int, month: int, amount: string, actual_spending: string, remaining: string, usage_percentage: ?float, usage_status: string, created_at: mixed, updated_at: mixed}
      */
-    private function presentBudget(Budget $budget): array
+    private function presentBudget(Budget $budget, array $derived): array
     {
         $budget->loadMissing('category');
 
@@ -186,6 +209,10 @@ class BudgetController extends Controller
             'year' => $budget->year,
             'month' => $budget->month,
             'amount' => (string) $budget->amount,
+            'actual_spending' => $derived['actual_spending'],
+            'remaining' => $derived['remaining'],
+            'usage_percentage' => $derived['usage_percentage'],
+            'usage_status' => $derived['usage_status'],
             'created_at' => $budget->created_at,
             'updated_at' => $budget->updated_at,
         ];

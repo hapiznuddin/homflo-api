@@ -63,6 +63,57 @@ class TransactionRepository implements TransactionRepositoryInterface
             ->first();
     }
 
+    /**
+     * @return array<string, string> category_id => exact 2dp decimal string
+     */
+    public function sumExpenseByCategory(Household $household, string $from, string $to): array
+    {
+        $rows = Transaction::query()
+            ->selectRaw('category_id, SUM(amount) as total')
+            ->where('household_id', $household->id)
+            ->where('type', Transaction::TYPE_EXPENSE)
+            ->whereNotNull('category_id')
+            ->whereDate('occurred_on', '>=', $from)
+            ->whereDate('occurred_on', '<=', $to)
+            ->groupBy('category_id')
+            ->get();
+
+        $totals = [];
+
+        foreach ($rows as $row) {
+            $totals[$row->category_id] = $this->normalizeDecimal($row->total);
+        }
+
+        return $totals;
+    }
+
+    public function sumExpenseTotal(Household $household, string $from, string $to): string
+    {
+        $total = Transaction::query()
+            ->where('household_id', $household->id)
+            ->where('type', Transaction::TYPE_EXPENSE)
+            ->whereDate('occurred_on', '>=', $from)
+            ->whereDate('occurred_on', '<=', $to)
+            ->sum('amount');
+
+        return $this->normalizeDecimal($total);
+    }
+
+    /**
+     * Normalize a database SUM result (string on pgsql, float|int on
+     * sqlite, null when no rows match) to an exact 2dp decimal string.
+     * Float64 holds every multiple of 0.01 below 9e13 exactly, so this
+     * is lossless inside the validated column max (9999999999999.99).
+     */
+    private function normalizeDecimal(mixed $total): string
+    {
+        if ($total === null || $total === '') {
+            return '0.00';
+        }
+
+        return number_format((float) $total, 2, '.', '');
+    }
+
     public function create(array $data): Transaction
     {
         return Transaction::query()->create($data);
