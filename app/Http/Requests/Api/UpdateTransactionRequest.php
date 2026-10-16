@@ -27,7 +27,7 @@ class UpdateTransactionRequest extends FormRequest
             'category_id' => ['sometimes', 'nullable', 'string', 'ulid'],
             'wallet_id' => ['sometimes', 'string', 'ulid'],
             'destination_wallet_id' => ['sometimes', 'nullable', 'string', 'ulid', 'different:wallet_id'],
-            'amount' => ['sometimes', 'numeric', 'min:0', 'max:9999999999999.99'],
+            'amount' => ['sometimes', 'numeric', 'gt:0', 'max:9999999999999.99'],
             'occurred_on' => ['sometimes', 'date_format:Y-m-d'],
             'description' => ['sometimes', 'nullable', 'string', 'max:5000'],
             'wallet' => ['sometimes', 'nullable', 'string', 'max:100'],

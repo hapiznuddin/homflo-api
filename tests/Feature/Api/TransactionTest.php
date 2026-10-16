@@ -255,28 +255,132 @@ describe('Transactions API validation and persistence', function () {
 
     test('store rejects malformed input', function () {
         $owner = User::factory()->create();
-        txHousehold($owner);
+        $household = txHousehold($owner);
+        $wallet = txWallet($household);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['type' => 'profit']))
+        $withWallet = fn (array $overrides): array => txPayload(array_merge(['wallet_id' => $wallet->id], $overrides));
+
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['type' => 'profit']))
             ->assertStatus(422)->assertJsonValidationErrors(['type']);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['category_id' => 'bukan-ulid']))
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['category_id' => 'bukan-ulid']))
             ->assertStatus(422)->assertJsonValidationErrors(['category_id']);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['amount' => 'banyak']))
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['amount' => 'banyak']))
             ->assertStatus(422)->assertJsonValidationErrors(['amount']);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['amount' => -100]))
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['amount' => -100]))
             ->assertStatus(422)->assertJsonValidationErrors(['amount']);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['amount' => 10000000000000]))
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['amount' => 10000000000000]))
             ->assertStatus(422)->assertJsonValidationErrors(['amount']);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['occurred_on' => '05-10-2026']))
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['occurred_on' => '05-10-2026']))
             ->assertStatus(422)->assertJsonValidationErrors(['occurred_on']);
 
-        $this->actingAs($owner)->postJson('/api/transactions', txPayload(['wallet' => str_repeat('w', 101)]))
+        $this->actingAs($owner)->postJson('/api/transactions', $withWallet(['wallet' => str_repeat('w', 101)]))
             ->assertStatus(422)->assertJsonValidationErrors(['wallet']);
+    });
+
+    test('store rejects zero amounts for income, expense, and transfer', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household);
+        $destination = txWallet($household, ['name' => 'Bank']);
+        $incomeCategory = Category::factory()->for($household)->create(['name' => 'Gaji', 'type' => 'income']);
+        $expenseCategory = Category::factory()->for($household)->create(['name' => 'Dapur', 'type' => 'expense']);
+
+        foreach ([
+            ['type' => 'income', 'category_id' => $incomeCategory->id],
+            ['type' => 'expense', 'category_id' => $expenseCategory->id],
+        ] as $case) {
+            $this->actingAs($owner)->postJson('/api/transactions', txPayload(array_merge($case, [
+                'amount' => 0,
+                'wallet_id' => $wallet->id,
+            ])))->assertStatus(422)->assertJsonValidationErrors(['amount']);
+        }
+
+        $this->actingAs($owner)->postJson('/api/transactions', txPayload([
+            'type' => 'transfer',
+            'amount' => '0.00',
+            'wallet_id' => $wallet->id,
+            'destination_wallet_id' => $destination->id,
+        ]))->assertStatus(422)->assertJsonValidationErrors(['amount']);
+
+        expect(Transaction::where('household_id', $household->id)->count())->toBe(0);
+        expect($wallet->refresh()->opening_balance)->toBe('100000000.00');
+    });
+
+    test('update rejects zero amounts without touching balances', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '100000.00']);
+        $destination = txWallet($household, ['name' => 'Bank', 'opening_balance' => '0.00']);
+        $incomeCategory = Category::factory()->for($household)->create(['name' => 'Gaji', 'type' => 'income']);
+        $expenseCategory = Category::factory()->for($household)->create(['name' => 'Dapur', 'type' => 'expense']);
+
+        $income = Transaction::factory()->for($household)->create([
+            'type' => 'income',
+            'category_id' => $incomeCategory->id,
+            'wallet_id' => $wallet->id,
+            'amount' => '60000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+        $expense = Transaction::factory()->for($household)->create([
+            'type' => 'expense',
+            'category_id' => $expenseCategory->id,
+            'wallet_id' => $wallet->id,
+            'amount' => '20000.00',
+            'occurred_on' => '2026-10-06',
+        ]);
+        $transfer = Transaction::factory()->for($household)->create([
+            'type' => 'transfer',
+            'category_id' => null,
+            'wallet_id' => $wallet->id,
+            'destination_wallet_id' => $destination->id,
+            'amount' => '10000.00',
+            'occurred_on' => '2026-10-07',
+        ]);
+
+        foreach ([$income->id, $expense->id, $transfer->id] as $id) {
+            $this->actingAs($owner)->patchJson("/api/transactions/{$id}", ['amount' => 0])
+                ->assertStatus(422)->assertJsonValidationErrors(['amount']);
+        }
+
+        expect($income->refresh()->amount)->toBe('60000.00');
+        expect($expense->refresh()->amount)->toBe('20000.00');
+        expect($transfer->refresh()->amount)->toBe('10000.00');
+
+        $balance = $this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance');
+        expect($balance)->toBe('130000.00');
+        expect(Transaction::where('household_id', $household->id)->count())->toBe(3);
+    });
+
+    test('historical zero-amount rows stay readable and untouched', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '50000.00']);
+
+        $legacy = Transaction::factory()->for($household)->create([
+            'type' => 'expense',
+            'category_id' => null,
+            'wallet_id' => $wallet->id,
+            'amount' => '0.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        $this->actingAs($owner)->getJson("/api/transactions/{$legacy->id}")
+            ->assertOk()
+            ->assertJsonPath('data.amount', '0.00');
+
+        $this->actingAs($owner)->patchJson("/api/transactions/{$legacy->id}", ['description' => 'koreksi teks'])
+            ->assertOk();
+
+        expect($legacy->refresh()->amount)->toBe('0.00');
+        expect($legacy->description)->toBe('koreksi teks');
+
+        $balance = $this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance');
+        expect($balance)->toBe('50000.00');
     });
 
     test('store persists exact values with embedded category', function () {
