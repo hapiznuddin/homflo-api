@@ -99,6 +99,18 @@ class TransactionRepository implements TransactionRepositoryInterface
         return $this->normalizeDecimal($total);
     }
 
+    public function sumIncomeTotal(Household $household, string $from, string $to): string
+    {
+        $total = Transaction::query()
+            ->where('household_id', $household->id)
+            ->where('type', Transaction::TYPE_INCOME)
+            ->whereDate('occurred_on', '>=', $from)
+            ->whereDate('occurred_on', '<=', $to)
+            ->sum('amount');
+
+        return $this->normalizeDecimal($total);
+    }
+
     /**
      * Normalize a database SUM result (string on pgsql, float|int on
      * sqlite, null when no rows match) to an exact 2dp decimal string.

@@ -57,9 +57,9 @@ describe('GET /api/dashboard', function () {
         $response->assertJsonPath('data.household.member_count', 1);
         $response->assertJsonPath('data.household.pending_invitations', 0);
         $response->assertJsonPath('data.financial', [
-            'income' => 0,
-            'expense' => 0,
-            'net_cash_flow' => 0,
+            'income' => '0.00',
+            'expense' => '0.00',
+            'net_cash_flow' => '0.00',
             'income_change_percent' => 0,
             'budget_usage_percent' => 0,
             'cash_flow_status' => 'seimbang',
@@ -169,9 +169,11 @@ describe('GET /api/dashboard', function () {
 
         $this->actingAs($user)->getJson('/api/dashboard')->assertStatus(200);
 
-        // Diukur: tepat 5 query (membership + household + find + 2 count),
-        // semuanya terfilter household_id/user_id. Batas 6 menangkap regresi
-        // N+1 tanpa membuat test rapuh terhadap perubahan framework.
-        expect(count(DB::getQueryLog()))->toBeLessThanOrEqual(6);
+        // Diukur: tepat 7 query (membership + household + find + 2 count +
+        // 2 agregat finansial income/expense), semuanya terfilter
+        // household_id/user_id dan konstan terhadap jumlah baris. Batas 8
+        // menangkap regresi N+1 tanpa membuat test rapuh terhadap
+        // perubahan framework.
+        expect(count(DB::getQueryLog()))->toBeLessThanOrEqual(8);
     });
 });

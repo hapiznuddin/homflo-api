@@ -12,7 +12,6 @@ use App\Models\Transaction;
 use App\Repositories\Contracts\BudgetRepositoryInterface;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
 use App\Repositories\Contracts\TransactionRepositoryInterface;
-use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
 
 class BudgetService
@@ -135,7 +134,7 @@ class BudgetService
      */
     public function listWithSpending(Household $household, array $filters, ?string $today = null): array
     {
-        $today ??= $this->businessToday();
+        $today ??= PeriodBounds::businessToday();
         $items = $this->budgets->listForHousehold($household, $filters);
 
         $spending = [];
@@ -171,8 +170,8 @@ class BudgetService
      */
     public function deriveFor(Household $household, Budget $budget, ?string $today = null): array
     {
-        $today ??= $this->businessToday();
-        [$start] = $this->effectiveBounds($budget->year, $budget->month, $today);
+        $today ??= PeriodBounds::businessToday();
+        [$start] = PeriodBounds::effectiveBounds($budget->year, $budget->month, $today);
 
         $spent = $start === null
             ? '0.00'
@@ -219,7 +218,7 @@ class BudgetService
         $key = "{$household->id}|{$year}-{$month}";
 
         if (! array_key_exists($key, $this->spendingCache)) {
-            [$start, $end] = $this->effectiveBounds($year, $month, $today);
+            [$start, $end] = PeriodBounds::effectiveBounds($year, $month, $today);
 
             $this->spendingCache[$key] = $start === null
                 ? []
@@ -231,42 +230,13 @@ class BudgetService
 
     private function householdTotalForPeriod(Household $household, int $year, int $month, string $today): string
     {
-        [$start, $end] = $this->effectiveBounds($year, $month, $today);
+        [$start, $end] = PeriodBounds::effectiveBounds($year, $month, $today);
 
         if ($start === null) {
             return '0.00';
         }
 
         return $this->normalizeDecimal($this->transactions->sumExpenseTotal($household, $start, $end));
-    }
-
-    /**
-     * Inclusive calendar bounds capped at the business reference date.
-     * Returns [null, null] when the period has not started yet.
-     *
-     * @return array{0: ?string, 1: ?string}
-     */
-    private function effectiveBounds(int $year, int $month, string $today): array
-    {
-        $start = sprintf('%04d-%02d-01', $year, $month);
-        $end = Carbon::createFromDate($year, $month, 1)->endOfMonth()->toDateString();
-        $effectiveEnd = min($end, $today);
-
-        if ($effectiveEnd < $start) {
-            return [null, null];
-        }
-
-        return [$start, $effectiveEnd];
-    }
-
-    /**
-     * Single server-side business reference date (Asia/Jakarta) for the
-     * whole operation. Never the browser clock. The global app timezone
-     * and timestamp storage are untouched.
-     */
-    private function businessToday(): string
-    {
-        return Carbon::now('Asia/Jakarta')->toDateString();
     }
 
     /**

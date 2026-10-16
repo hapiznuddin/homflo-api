@@ -36,6 +36,14 @@ interface TransactionRepositoryInterface
      */
     public function sumExpenseTotal(Household $household, string $from, string $to): string;
 
+    /**
+     * Sum all income amounts inside an inclusive date range, using one
+     * database aggregation. Transfers, adjustments, and opening balances
+     * are never transactions, so they can never leak into this total:
+     * only rows explicitly typed as income are counted.
+     */
+    public function sumIncomeTotal(Household $household, string $from, string $to): string;
+
     public function create(array $data): Transaction;
 
     public function update(Transaction $transaction, array $data): Transaction;

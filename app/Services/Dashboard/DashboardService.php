@@ -5,6 +5,9 @@ namespace App\Services\Dashboard;
 use App\Models\Household;
 use App\Repositories\Contracts\HouseholdInvitationRepositoryInterface;
 use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
+use App\Repositories\Contracts\TransactionRepositoryInterface;
+use App\Services\Finance\LedgerMath;
+use App\Services\Finance\PeriodBounds;
 
 class DashboardService
 {
@@ -19,15 +22,16 @@ class DashboardService
     public function __construct(
         private readonly HouseholdMemberRepositoryInterface $householdMembers,
         private readonly HouseholdInvitationRepositoryInterface $householdInvitations,
+        private readonly TransactionRepositoryInterface $transactions,
     ) {}
 
     /**
      * Build the dashboard read-model for one household and period.
      *
-     * Every number comes from a household-scoped query below. Domains in
-     * UNSUPPORTED_DOMAINS aggregate to zero/empty collections until their
-     * persistence lands; empty ledgers aggregate to zero, which is the
-     * truthful value — never a placeholder.
+     * Every number comes from a household-scoped query below. Financial
+     * aggregates share the exact calendar bounds of Actual Spending
+     * (PeriodBounds, Asia/Jakarta business date), so Income, Expense, and
+     * Net Cash Flow always describe the same effective period.
      *
      * @param  array{id: string, name: string, role: string}  $household  Server-resolved context, never client input.
      * @return array<string, mixed>
@@ -35,8 +39,16 @@ class DashboardService
     public function forHouseholdInPeriod(array $household, int $year, int $month): array
     {
         $householdModel = Household::query()->findOrFail($household['id']);
-        $income = $this->sumIncomeForPeriod($household['id'], $year, $month);
-        $expense = $this->sumExpenseForPeriod($household['id'], $year, $month);
+        $today = PeriodBounds::businessToday();
+        [$start, $end] = PeriodBounds::effectiveBounds($year, $month, $today);
+
+        $income = $start === null
+            ? '0.00'
+            : $this->transactions->sumIncomeTotal($householdModel, $start, $end);
+        $expense = $start === null
+            ? '0.00'
+            : $this->transactions->sumExpenseTotal($householdModel, $start, $end);
+        $netCashFlow = LedgerMath::sub($income, $expense);
 
         return [
             'period' => [
@@ -54,10 +66,14 @@ class DashboardService
             'financial' => [
                 'income' => $income,
                 'expense' => $expense,
-                'net_cash_flow' => $income - $expense,
+                'net_cash_flow' => $netCashFlow,
                 'income_change_percent' => 0,
                 'budget_usage_percent' => 0,
-                'cash_flow_status' => 'seimbang',
+                'cash_flow_status' => match (LedgerMath::compare($netCashFlow, '0.00')) {
+                    1 => 'surplus',
+                    -1 => 'defisit',
+                    default => 'seimbang',
+                },
             ],
             'budget' => [],
             'upcoming_bills' => [],
@@ -65,17 +81,5 @@ class DashboardService
             'maintenance' => [],
             'meta' => ['unsupported_domains' => self::UNSUPPORTED_DOMAINS],
         ];
-    }
-
-    private function sumIncomeForPeriod(string $householdId, int $year, int $month): int
-    {
-        // No income persistence exists yet (see UNSUPPORTED_DOMAINS).
-        return 0;
-    }
-
-    private function sumExpenseForPeriod(string $householdId, int $year, int $month): int
-    {
-        // No expense persistence exists yet (see UNSUPPORTED_DOMAINS).
-        return 0;
     }
 }
