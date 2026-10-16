@@ -12,12 +12,16 @@ use App\Repositories\Contracts\HouseholdRepositoryInterface;
 use App\Repositories\Contracts\OAuthAccountRepositoryInterface;
 use App\Repositories\Contracts\TransactionRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
+use App\Repositories\Contracts\WalletAdjustmentRepositoryInterface;
+use App\Repositories\Contracts\WalletRepositoryInterface;
 use App\Repositories\HouseholdInvitationRepository;
 use App\Repositories\HouseholdMemberRepository;
 use App\Repositories\HouseholdRepository;
 use App\Repositories\OAuthAccountRepository;
 use App\Repositories\TransactionRepository;
 use App\Repositories\UserRepository;
+use App\Repositories\WalletAdjustmentRepository;
+use App\Repositories\WalletRepository;
 use Illuminate\Support\ServiceProvider;
 
 class RepositoryServiceProvider extends ServiceProvider
@@ -58,6 +62,14 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             BudgetRepositoryInterface::class,
             BudgetRepository::class,
+        );
+        $this->app->bind(
+            WalletRepositoryInterface::class,
+            WalletRepository::class,
+        );
+        $this->app->bind(
+            WalletAdjustmentRepositoryInterface::class,
+            WalletAdjustmentRepository::class,
         );
     }
 

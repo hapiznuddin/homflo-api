@@ -19,9 +19,13 @@ class Transaction extends Model
 
     public const TYPE_EXPENSE = 'expense';
 
+    public const TYPE_TRANSFER = 'transfer';
+
     protected $fillable = [
         'household_id',
         'category_id',
+        'wallet_id',
+        'destination_wallet_id',
         'type',
         'amount',
         'occurred_on',
@@ -47,6 +51,23 @@ class Transaction extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(Category::class);
+    }
+
+    /**
+     * Wallet this ledger row is posted against: the receiver for income,
+     * the source for expense and transfer.
+     */
+    public function sourceWallet(): BelongsTo
+    {
+        return $this->belongsTo(Wallet::class, 'wallet_id');
+    }
+
+    /**
+     * Receiving wallet for transfer rows; null for income and expense.
+     */
+    public function destinationWallet(): BelongsTo
+    {
+        return $this->belongsTo(Wallet::class, 'destination_wallet_id');
     }
 
     public function source(): MorphTo

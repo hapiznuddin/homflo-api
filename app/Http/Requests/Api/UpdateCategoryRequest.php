@@ -25,6 +25,7 @@ class UpdateCategoryRequest extends FormRequest
         return [
             'name' => ['sometimes', 'string', 'max:255'],
             'icon' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'type' => ['sometimes', 'string', 'in:income,expense'],
         ];
     }
 }

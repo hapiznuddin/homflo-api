@@ -32,34 +32,32 @@ class BudgetPolicy
     /**
      * Determine whether the user can create a budget.
      *
-     * Any household member (owner or member) may create. There is no
-     * owner-only finance rule in the project documents; this needs
-     * product confirmation if stricter roles are wanted.
+     * Owner-only: targets constrain the shared household plan.
      */
     public function create(User $user, Household $household): bool
     {
-        return $this->membership($user, $household->id) !== null;
+        return $this->owner($user, $household->id) !== null;
     }
 
     /**
      * Determine whether the user can update the budget.
      *
-     * Any member of the budget's household may update.
+     * Owner-only.
      */
     public function update(User $user, Budget $budget): bool
     {
-        return $this->membership($user, $budget->household_id) !== null;
+        return $this->owner($user, $budget->household_id) !== null;
     }
 
     /**
      * Determine whether the user can delete the budget.
      *
-     * Any member of the budget's household may delete. Deleting a budget
-     * removes a target only; transaction history is never touched.
+     * Owner-only. Deleting a budget removes a target only; transaction
+     * history is never touched.
      */
     public function delete(User $user, Budget $budget): bool
     {
-        return $this->membership($user, $budget->household_id) !== null;
+        return $this->owner($user, $budget->household_id) !== null;
     }
 
     /**
@@ -73,5 +71,20 @@ class BudgetPolicy
             ->where('user_id', $user->id)
             ->where('household_id', $household instanceof Household ? $household->id : $household)
             ->first();
+    }
+
+    /**
+     * Resolve an owner membership from server-side data only. Finance
+     * writes are owner-only; reads stay available to every member.
+     */
+    private function owner(User $user, Household|string $household): ?HouseholdMember
+    {
+        $membership = $this->membership($user, $household);
+
+        if ($membership === null || $membership->role !== 'owner') {
+            return null;
+        }
+
+        return $membership;
     }
 }

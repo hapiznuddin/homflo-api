@@ -17,6 +17,13 @@ interface CategoryRepositoryInterface
 
     public function existsByNameForHousehold(Household $household, string $name, ?string $exceptId = null): bool;
 
+    /**
+     * Whether any transaction or budget references the category.
+     * Re-typing a category in use would silently reinterpret history,
+     * so type changes on such categories are rejected.
+     */
+    public function hasHistory(Category $category): bool;
+
     public function create(array $data): Category;
 
     public function update(Category $category, array $data): Category;

@@ -6,10 +6,14 @@ use App\Models\Budget;
 use App\Models\Category;
 use App\Models\Household;
 use App\Models\Transaction;
+use App\Models\Wallet;
+use App\Models\WalletAdjustment;
 use App\Policies\BudgetPolicy;
 use App\Policies\CategoryPolicy;
 use App\Policies\HouseholdPolicy;
 use App\Policies\TransactionPolicy;
+use App\Policies\WalletAdjustmentPolicy;
+use App\Policies\WalletPolicy;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Auth\Notifications\VerifyEmail;
 use Illuminate\Support\Facades\Gate;
@@ -35,6 +39,8 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Transaction::class, TransactionPolicy::class);
         Gate::policy(Category::class, CategoryPolicy::class);
         Gate::policy(Budget::class, BudgetPolicy::class);
+        Gate::policy(Wallet::class, WalletPolicy::class);
+        Gate::policy(WalletAdjustment::class, WalletAdjustmentPolicy::class);
 
         VerifyEmail::createUrlUsing(function (object $notifiable) {
             return URL::temporarySignedRoute(

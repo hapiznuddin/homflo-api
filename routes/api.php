@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\TransactionController;
+use App\Http\Controllers\Api\WalletController;
 use Illuminate\Support\Facades\Route;
 
 // Route::get('/user', function (Request $request) {
@@ -30,6 +31,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Read-only household aggregate. Like /me, it needs no `verified` gate;
     // missing households surface as 404 so the app can route to onboarding.
     Route::get('/dashboard', DashboardController::class);
+
+    // Wallet reads are available to any household member, like the other
+    // finance reads. Wallet metadata and derived balances never expose
+    // other households: every row is resolved in server-side context.
+    Route::get('/wallets', [WalletController::class, 'index']);
+    Route::get('/wallets/{wallet}', [WalletController::class, 'show']);
+    Route::get('/wallets/{wallet}/adjustments', [WalletController::class, 'adjustments']);
 
     // Transaction ledger reads are available to any household member, like
     // /me and /dashboard. Recording, changing, and removing ledger rows
@@ -75,6 +83,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/budgets', [BudgetController::class, 'store']);
         Route::patch('/budgets/{budget}', [BudgetController::class, 'update']);
         Route::delete('/budgets/{budget}', [BudgetController::class, 'destroy']);
+        Route::post('/wallets', [WalletController::class, 'store']);
+        Route::patch('/wallets/{wallet}', [WalletController::class, 'update']);
+        Route::post('/wallets/{wallet}/deactivate', [WalletController::class, 'deactivate']);
+        Route::delete('/wallets/{wallet}', [WalletController::class, 'destroy']);
+        Route::post('/wallets/{wallet}/adjustments', [WalletController::class, 'adjust']);
     });
 });
 

@@ -30,6 +30,7 @@ function spendingCategory(Household $household, string $name = 'Dapur'): Categor
     return Category::factory()->create([
         'household_id' => $household->id,
         'name' => $name,
+        'type' => Category::TYPE_EXPENSE,
     ]);
 }
 
@@ -328,9 +329,15 @@ describe('Actual spending dan perubahan data', function () {
         $category = spendingCategory($household);
         $budget = spendingBudget($household, $category);
         $transaction = spendingTx($household, ['category_id' => $category->id, 'amount' => '10000.00']);
+        $incomeCategory = Category::factory()->for($household)->create([
+            'name' => 'Gaji',
+            'type' => Category::TYPE_INCOME,
+        ]);
 
-        $this->actingAs($owner)->patchJson("/api/transactions/{$transaction->id}", ['type' => 'income'])
-            ->assertOk();
+        $this->actingAs($owner)->patchJson("/api/transactions/{$transaction->id}", [
+            'type' => 'income',
+            'category_id' => $incomeCategory->id,
+        ])->assertOk();
 
         $item = spendingItem($this->actingAs($owner)->getJson('/api/budgets?year=2026&month=10'), $budget->id);
 

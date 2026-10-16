@@ -32,34 +32,32 @@ class TransactionPolicy
     /**
      * Determine whether the user can record a transaction.
      *
-     * Any household member (owner or member) may record. There is no
-     * owner-only finance rule in the project documents; this needs
-     * product confirmation if stricter roles are wanted.
+     * Owner-only: recording mutates the shared ledger and wallet balances.
      */
     public function create(User $user, Household $household): bool
     {
-        return $this->membership($user, $household->id) !== null;
+        return $this->owner($user, $household->id) !== null;
     }
 
     /**
      * Determine whether the user can update the transaction.
      *
-     * Any member of the transaction's household may update.
+     * Owner-only: edits re-validate every affected wallet balance.
      */
     public function update(User $user, Transaction $transaction): bool
     {
-        return $this->membership($user, $transaction->household_id) !== null;
+        return $this->owner($user, $transaction->household_id) !== null;
     }
 
     /**
      * Determine whether the user can delete the transaction.
      *
-     * Any member of the transaction's household may delete. No retention
-     * workflow exists yet; hard delete matches the schema.
+     * Owner-only. No retention workflow exists yet; hard delete matches
+     * the schema, after balance validation.
      */
     public function delete(User $user, Transaction $transaction): bool
     {
-        return $this->membership($user, $transaction->household_id) !== null;
+        return $this->owner($user, $transaction->household_id) !== null;
     }
 
     /**
@@ -73,5 +71,20 @@ class TransactionPolicy
             ->where('user_id', $user->id)
             ->where('household_id', $household instanceof Household ? $household->id : $household)
             ->first();
+    }
+
+    /**
+     * Resolve an owner membership from server-side data only. Finance
+     * writes are owner-only; reads stay available to every member.
+     */
+    private function owner(User $user, Household|string $household): ?HouseholdMember
+    {
+        $membership = $this->membership($user, $household);
+
+        if ($membership === null || $membership->role !== 'owner') {
+            return null;
+        }
+
+        return $membership;
     }
 }

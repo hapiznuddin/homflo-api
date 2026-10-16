@@ -26,9 +26,9 @@ function bgHousehold(User $owner, string $name = 'Rumah Budget', string $role = 
     return $household->refresh();
 }
 
-function bgCategory(Household $household, string $name = 'Dapur'): Category
+function bgCategory(Household $household, string $name = 'Dapur', string $type = 'expense'): Category
 {
-    return Category::factory()->for($household)->create(['name' => $name]);
+    return Category::factory()->for($household)->create(['name' => $name, 'type' => $type]);
 }
 
 function bgRecord(Household $household, Category $category, array $overrides = []): Budget
@@ -224,24 +224,28 @@ describe('Budgets API authorization and household isolation', function () {
             ->assertJsonPath('error.code', 'EMAIL_NOT_VERIFIED');
     });
 
-    test('member role can manage the shared targets', function () {
+    test('member role reads but cannot mutate the shared targets', function () {
         $member = User::factory()->create();
         $household = bgHousehold($member, 'Keluarga', 'member');
         $category = bgCategory($household);
 
         $this->actingAs($member)->getJson('/api/budgets')->assertOk();
 
-        $created = $this->actingAs($member)->postJson('/api/budgets', array_merge(bgPayload(), [
+        $this->actingAs($member)->postJson('/api/budgets', array_merge(bgPayload(), [
             'category_id' => $category->id,
-        ]));
-        $created->assertStatus(201);
+        ]))
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'HOUSEHOLD_NOT_FOUND');
 
         $budget = bgRecord($household, bgCategory($household, 'Lain'), ['year' => 2026, 'month' => 11]);
 
         $this->actingAs($member)->patchJson("/api/budgets/{$budget->id}", ['amount' => '700000.00'])
-            ->assertOk();
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'BUDGET_NOT_FOUND');
 
-        $this->actingAs($member)->deleteJson("/api/budgets/{$budget->id}")->assertOk();
+        $this->actingAs($member)->deleteJson("/api/budgets/{$budget->id}")
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'BUDGET_NOT_FOUND');
     });
 });
 

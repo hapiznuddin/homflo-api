@@ -58,4 +58,11 @@ class CategoryRepository implements CategoryRepositoryInterface
     {
         $category->delete();
     }
+
+    public function hasHistory(Category $category): bool
+    {
+        return $category->transactions()->exists()
+            || $category->budgets()->exists()
+            || $category->bills()->exists();
+    }
 }

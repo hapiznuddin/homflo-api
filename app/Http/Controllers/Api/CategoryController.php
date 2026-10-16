@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exceptions\CategoryAlreadyExistsException;
 use App\Exceptions\CategoryInUseException;
+use App\Exceptions\CategoryTypeMismatchException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\StoreCategoryRequest;
 use App\Http\Requests\Api\UpdateCategoryRequest;
@@ -104,6 +105,8 @@ class CategoryController extends Controller
             $updated = $this->categoryService->change($household, $resolved, $request->validated());
         } catch (CategoryAlreadyExistsException $exception) {
             return $this->unprocessable('CATEGORY_ALREADY_EXISTS', $exception->getMessage());
+        } catch (CategoryTypeMismatchException $exception) {
+            return $this->unprocessable('CATEGORY_TYPE_MISMATCH', $exception->getMessage());
         }
 
         return response()->json([
@@ -178,6 +181,7 @@ class CategoryController extends Controller
             'household_id' => $category->household_id,
             'name' => $category->name,
             'icon' => $category->icon,
+            'type' => $category->type,
             'created_at' => $category->created_at,
             'updated_at' => $category->updated_at,
         ];

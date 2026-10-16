@@ -31,6 +31,7 @@ function catPayload(array $overrides = []): array
     return array_merge([
         'name' => 'Dapur',
         'icon' => 'i-lucide-cooking-pot',
+        'type' => 'expense',
     ], $overrides);
 }
 
@@ -153,21 +154,27 @@ describe('Categories API authorization and household isolation', function () {
             ->assertJsonPath('error.code', 'EMAIL_NOT_VERIFIED');
     });
 
-    test('member role can manage the shared catalogue', function () {
+    test('member role reads but cannot mutate the shared catalogue', function () {
         $member = User::factory()->create();
         $household = catHousehold($member, 'Keluarga', 'member');
 
         $this->actingAs($member)->getJson('/api/categories')->assertOk();
 
-        $created = $this->actingAs($member)->postJson('/api/categories', catPayload(['name' => 'Jajan']));
-        $created->assertStatus(201);
+        $this->actingAs($member)->postJson('/api/categories', catPayload(['name' => 'Jajan']))
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'HOUSEHOLD_NOT_FOUND');
 
         $category = Category::factory()->for($household)->create();
 
-        $this->actingAs($member)->patchJson("/api/categories/{$category->id}", ['name' => 'Oleh member'])
-            ->assertOk();
+        $this->actingAs($member)->getJson("/api/categories/{$category->id}")->assertOk();
 
-        $this->actingAs($member)->deleteJson("/api/categories/{$category->id}")->assertOk();
+        $this->actingAs($member)->patchJson("/api/categories/{$category->id}", ['name' => 'Oleh member'])
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'CATEGORY_NOT_FOUND');
+
+        $this->actingAs($member)->deleteJson("/api/categories/{$category->id}")
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'CATEGORY_NOT_FOUND');
     });
 });
 
@@ -178,7 +185,7 @@ describe('Categories API validation and persistence', function () {
 
         $this->actingAs($owner)->postJson('/api/categories', [])
             ->assertStatus(422)
-            ->assertJsonValidationErrors(['name']);
+            ->assertJsonValidationErrors(['name', 'type']);
     });
 
     test('store rejects malformed input', function () {
@@ -193,13 +200,16 @@ describe('Categories API validation and persistence', function () {
 
         $this->actingAs($owner)->postJson('/api/categories', catPayload(['icon' => 123]))
             ->assertStatus(422)->assertJsonValidationErrors(['icon']);
+
+        $this->actingAs($owner)->postJson('/api/categories', catPayload(['type' => 'profit']))
+            ->assertStatus(422)->assertJsonValidationErrors(['type']);
     });
 
     test('store persists with explicit presenter and icon defaults to null', function () {
         $owner = User::factory()->create();
         $household = catHousehold($owner);
 
-        $response = $this->actingAs($owner)->postJson('/api/categories', ['name' => 'Dapur']);
+        $response = $this->actingAs($owner)->postJson('/api/categories', ['name' => 'Dapur', 'type' => 'expense']);
 
         $response->assertStatus(201)->assertJsonPath('success', true);
 
@@ -207,12 +217,14 @@ describe('Categories API validation and persistence', function () {
 
         expect($data['name'])->toBe('Dapur');
         expect($data['icon'])->toBeNull();
+        expect($data['type'])->toBe('expense');
         expect($data['household_id'])->toBe($household->id);
         expect(array_keys($data))->toEqual([
             'id',
             'household_id',
             'name',
             'icon',
+            'type',
             'created_at',
             'updated_at',
         ]);

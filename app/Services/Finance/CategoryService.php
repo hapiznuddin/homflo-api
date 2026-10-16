@@ -4,6 +4,7 @@ namespace App\Services\Finance;
 
 use App\Exceptions\CategoryAlreadyExistsException;
 use App\Exceptions\CategoryInUseException;
+use App\Exceptions\CategoryTypeMismatchException;
 use App\Models\Category;
 use App\Models\Household;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
@@ -30,7 +31,7 @@ class CategoryService
      * Ownership always comes from the server-resolved household; client
      * payload can never set household_id.
      *
-     * @param  array{name: string, icon?: ?string}  $data
+     * @param  array{name: string, icon?: ?string, type: string}  $data
      *
      * @throws CategoryAlreadyExistsException
      */
@@ -44,16 +45,22 @@ class CategoryService
             'household_id' => $household->id,
             'name' => $data['name'],
             'icon' => $data['icon'] ?? null,
+            'type' => $data['type'],
         ]);
     }
 
     /**
-     * Rename a category or change its icon. The unique check excludes the
-     * category itself so no-op updates stay valid.
+     * Rename a category, change its icon, or classify a legacy untyped
+     * category. The unique check excludes the category itself so no-op
+     * updates stay valid. Re-typing a category that already classifies
+     * history is rejected: history must never be reinterpreted by an
+     * edit. A legacy category without a type may be classified once, or
+     * re-classified while still unused.
      *
-     * @param  array{name?: string, icon?: ?string}  $data
+     * @param  array{name?: string, icon?: ?string, type?: string}  $data
      *
      * @throws CategoryAlreadyExistsException
+     * @throws CategoryTypeMismatchException
      */
     public function change(Household $household, Category $category, array $data): Category
     {
@@ -69,6 +76,16 @@ class CategoryService
 
         if (array_key_exists('icon', $data)) {
             $attributes['icon'] = $data['icon'];
+        }
+
+        if (array_key_exists('type', $data)) {
+            if ($data['type'] !== $category->type
+                && $category->type !== null
+                && $this->categories->hasHistory($category)) {
+                throw new CategoryTypeMismatchException('Category with history cannot change type.');
+            }
+
+            $attributes['type'] = $data['type'];
         }
 
         return $this->categories->update($category, $attributes);

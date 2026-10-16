@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exceptions\BudgetAlreadyExistsException;
 use App\Exceptions\CategoryNotFoundException;
+use App\Exceptions\CategoryTypeMismatchException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\IndexBudgetRequest;
 use App\Http\Requests\Api\StoreBudgetRequest;
@@ -72,6 +73,8 @@ class BudgetController extends Controller
             $budget = $this->budgetService->record($household, $request->validated());
         } catch (CategoryNotFoundException) {
             return $this->categoryNotFound();
+        } catch (CategoryTypeMismatchException $exception) {
+            return $this->unprocessable('CATEGORY_TYPE_MISMATCH', $exception->getMessage());
         } catch (BudgetAlreadyExistsException $exception) {
             return $this->unprocessable('BUDGET_ALREADY_EXISTS', $exception->getMessage());
         }
@@ -128,6 +131,8 @@ class BudgetController extends Controller
             $updated = $this->budgetService->change($household, $resolved, $request->validated());
         } catch (CategoryNotFoundException) {
             return $this->categoryNotFound();
+        } catch (CategoryTypeMismatchException $exception) {
+            return $this->unprocessable('CATEGORY_TYPE_MISMATCH', $exception->getMessage());
         } catch (BudgetAlreadyExistsException $exception) {
             return $this->unprocessable('BUDGET_ALREADY_EXISTS', $exception->getMessage());
         }

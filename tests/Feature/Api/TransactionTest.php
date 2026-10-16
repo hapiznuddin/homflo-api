@@ -6,6 +6,7 @@ use App\Models\Household;
 use App\Models\HouseholdMember;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Models\Wallet;
 use App\Policies\TransactionPolicy;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -32,6 +33,19 @@ function txRecord(Household $household, array $overrides = []): Transaction
     return Transaction::factory()
         ->for($household)
         ->create($overrides);
+}
+
+/**
+ * Funded wallet for posting tests. Write paths lock the wallet and
+ * validate the resulting balance, so posting tests need real funds.
+ */
+function txWallet(Household $household, array $overrides = []): Wallet
+{
+    return Wallet::factory()
+        ->for($household)
+        ->create(array_merge([
+            'opening_balance' => '100000000.00',
+        ], $overrides));
 }
 
 function txPayload(array $overrides = []): array
@@ -66,7 +80,7 @@ describe('Transactions API authentication', function () {
             ->assertJsonPath('success', false)
             ->assertJsonPath('error.code', 'HOUSEHOLD_NOT_FOUND');
 
-        $this->actingAs($user)->postJson('/api/transactions', txPayload())
+        $this->actingAs($user)->postJson('/api/transactions', txPayload(['wallet_id' => (string) Str::ulid()]))
             ->assertStatus(404)
             ->assertJsonPath('error.code', 'HOUSEHOLD_NOT_FOUND');
     });
@@ -118,6 +132,7 @@ describe('Transactions API authorization and household isolation', function () {
     test('forged household ownership in payload is ignored', function () {
         $owner = User::factory()->create();
         $mine = txHousehold($owner);
+        $wallet = txWallet($mine);
 
         $stranger = User::factory()->create();
         $foreign = txHousehold($stranger, 'Asing');
@@ -126,6 +141,7 @@ describe('Transactions API authorization and household isolation', function () {
             'household_id' => $foreign->id,
             'user_id' => $stranger->id,
             'role' => 'owner',
+            'wallet_id' => $wallet->id,
         ]));
 
         $response->assertStatus(201);
@@ -147,6 +163,7 @@ describe('Transactions API authorization and household isolation', function () {
     test('foreign and missing categories surface identically as not found', function () {
         $owner = User::factory()->create();
         $mine = txHousehold($owner);
+        $wallet = txWallet($mine);
 
         $stranger = User::factory()->create();
         $foreignHousehold = txHousehold($stranger, 'Asing');
@@ -154,6 +171,7 @@ describe('Transactions API authorization and household isolation', function () {
 
         $foreignResponse = $this->actingAs($owner)->postJson('/api/transactions', txPayload([
             'category_id' => $foreignCategory->id,
+            'wallet_id' => $wallet->id,
         ]));
 
         $foreignResponse
@@ -163,6 +181,7 @@ describe('Transactions API authorization and household isolation', function () {
 
         $missingResponse = $this->actingAs($owner)->postJson('/api/transactions', txPayload([
             'category_id' => (string) Str::ulid(),
+            'wallet_id' => $wallet->id,
         ]));
 
         $missingResponse
@@ -199,20 +218,28 @@ describe('Transactions API authorization and household isolation', function () {
             ->assertJsonPath('error.code', 'EMAIL_NOT_VERIFIED');
     });
 
-    test('member role (non-owner) can manage the shared ledger', function () {
+    test('member role (non-owner) reads but cannot mutate the shared ledger', function () {
         $member = User::factory()->create();
         $household = txHousehold($member, 'Keluarga', 'member');
+        $wallet = txWallet($household);
         $transaction = txRecord($household);
 
         $this->actingAs($member)->getJson('/api/transactions')->assertOk();
+        $this->actingAs($member)->getJson("/api/transactions/{$transaction->id}")->assertOk();
 
-        $created = $this->actingAs($member)->postJson('/api/transactions', txPayload());
-        $created->assertStatus(201);
+        $this->actingAs($member)->postJson('/api/transactions', txPayload(['wallet_id' => $wallet->id]))
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'HOUSEHOLD_NOT_FOUND');
 
         $this->actingAs($member)->patchJson("/api/transactions/{$transaction->id}", ['description' => 'oleh member'])
-            ->assertOk();
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'TRANSACTION_NOT_FOUND');
 
-        $this->actingAs($member)->deleteJson("/api/transactions/{$transaction->id}")->assertOk();
+        $this->actingAs($member)->deleteJson("/api/transactions/{$transaction->id}")
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'TRANSACTION_NOT_FOUND');
+
+        expect(Transaction::where('household_id', $household->id)->count())->toBe(1);
     });
 });
 
@@ -223,7 +250,7 @@ describe('Transactions API validation and persistence', function () {
 
         $this->actingAs($owner)->postJson('/api/transactions', [])
             ->assertStatus(422)
-            ->assertJsonValidationErrors(['type', 'amount', 'occurred_on']);
+            ->assertJsonValidationErrors(['type', 'wallet_id', 'amount', 'occurred_on']);
     });
 
     test('store rejects malformed input', function () {
@@ -255,12 +282,14 @@ describe('Transactions API validation and persistence', function () {
     test('store persists exact values with embedded category', function () {
         $owner = User::factory()->create();
         $household = txHousehold($owner);
+        $wallet = txWallet($household);
         $category = Category::factory()->for($household)->create(['name' => 'Dapur', 'icon' => 'i-lucide-egg']);
 
         $response = $this->actingAs($owner)->postJson('/api/transactions', txPayload([
             'type' => 'income',
             'amount' => '150000.50',
             'category_id' => $category->id,
+            'wallet_id' => $wallet->id,
             'description' => null,
             'wallet' => null,
         ]));
@@ -286,9 +315,13 @@ describe('Transactions API validation and persistence', function () {
 
     test('store normalizes integer amounts to exact decimals', function () {
         $owner = User::factory()->create();
-        txHousehold($owner);
+        $household = txHousehold($owner);
+        $wallet = txWallet($household);
 
-        $response = $this->actingAs($owner)->postJson('/api/transactions', txPayload(['amount' => 150000]));
+        $response = $this->actingAs($owner)->postJson('/api/transactions', txPayload([
+            'amount' => 150000,
+            'wallet_id' => $wallet->id,
+        ]));
 
         $response->assertStatus(201);
         expect($response->json('data.amount'))->toBe('150000.00');
@@ -465,6 +498,10 @@ describe('Transactions API validation and persistence', function () {
             'occurred_on',
             'description',
             'wallet',
+            'wallet_id',
+            'destination_wallet_id',
+            'source_wallet',
+            'destination_wallet',
             'category',
             'created_at',
             'updated_at',
@@ -502,12 +539,19 @@ describe('Transactions API validation and persistence', function () {
 });
 
 describe('TransactionPolicy', function () {
-    test('members manage their household ledger, outsiders cannot', function () {
+    test('owners manage their household ledger, members read, outsiders cannot', function () {
         $policy = new TransactionPolicy;
 
         $owner = User::factory()->create();
         $household = txHousehold($owner);
         $transaction = txRecord($household);
+
+        $member = User::factory()->create();
+        HouseholdMember::create([
+            'household_id' => $household->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
 
         $outsider = User::factory()->create();
         $foreign = txHousehold($outsider, 'Asing');
@@ -518,6 +562,12 @@ describe('TransactionPolicy', function () {
         expect($policy->create($owner, $household))->toBeTrue();
         expect($policy->update($owner, $transaction))->toBeTrue();
         expect($policy->delete($owner, $transaction))->toBeTrue();
+
+        expect($policy->viewAny($member, $household))->toBeTrue();
+        expect($policy->view($member, $transaction))->toBeTrue();
+        expect($policy->create($member, $household))->toBeFalse();
+        expect($policy->update($member, $transaction))->toBeFalse();
+        expect($policy->delete($member, $transaction))->toBeFalse();
 
         expect($policy->viewAny($outsider, $household))->toBeFalse();
         expect($policy->view($outsider, $transaction))->toBeFalse();

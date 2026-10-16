@@ -15,10 +15,23 @@ class Category extends Model
     /** @use HasFactory<CategoryFactory> */
     use HasFactory, HasUlids;
 
+    public const TYPE_INCOME = 'income';
+
+    public const TYPE_EXPENSE = 'expense';
+
+    /**
+     * @return list<string>
+     */
+    public static function types(): array
+    {
+        return [self::TYPE_INCOME, self::TYPE_EXPENSE];
+    }
+
     protected $fillable = [
         'household_id',
         'name',
         'icon',
+        'type',
     ];
 
     public function household(): BelongsTo

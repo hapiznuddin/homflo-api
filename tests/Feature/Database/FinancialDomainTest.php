@@ -38,15 +38,19 @@ describe('financial domain foundation', function () {
     });
 
     test('migration rolls back and re-runs safely', function () {
-        expect(Schema::hasTable('files'))->toBeTrue();
+        // The newest migration batch owns the wallet tables; rolling back
+        // one step must remove them while leaving the older financial
+        // foundation untouched, and re-running must restore them.
+        expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
 
         $this->artisan('migrate:rollback', ['--step' => 1]);
 
-        expect(Schema::hasTable('files'))->toBeFalse();
+        expect(Schema::hasTable('wallet_adjustments'))->toBeFalse();
+        expect(Schema::hasTable('files'))->toBeTrue();
 
         $this->artisan('migrate');
 
-        expect(Schema::hasTable('files'))->toBeTrue();
+        expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
     });
 
     test('every model can be created through its factory with ULID keys', function () {

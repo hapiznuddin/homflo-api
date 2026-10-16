@@ -4,6 +4,7 @@ namespace App\Services\Finance;
 
 use App\Exceptions\BudgetAlreadyExistsException;
 use App\Exceptions\CategoryNotFoundException;
+use App\Exceptions\CategoryTypeMismatchException;
 use App\Models\Budget;
 use App\Models\Category;
 use App\Models\Household;
@@ -45,16 +46,19 @@ class BudgetService
      * Ownership always comes from the server-resolved household; client
      * payload can never set household_id. Spending itself is never stored
      * here — it is derived from transactions when a confirmed definition
-     * exists.
+     * exists. Only expense-typed categories may carry a target; legacy
+     * untyped categories are rejected fail-closed so no target is ever
+     * attached to an income semantic by accident.
      *
      * @param  array{category_id: string, year: int, month: int, amount: mixed}  $data
      *
      * @throws CategoryNotFoundException
+     * @throws CategoryTypeMismatchException
      * @throws BudgetAlreadyExistsException
      */
     public function record(Household $household, array $data): Budget
     {
-        $category = $this->resolveCategory($household, $data['category_id']);
+        $category = $this->resolveExpenseCategory($household, $data['category_id']);
 
         if ($this->budgets->existsForPeriod($household, $category->id, (int) $data['year'], (int) $data['month'])) {
             throw new BudgetAlreadyExistsException;
@@ -76,6 +80,7 @@ class BudgetService
      * @param  array{category_id?: string, year?: int, month?: int, amount?: mixed}  $data
      *
      * @throws CategoryNotFoundException
+     * @throws CategoryTypeMismatchException
      * @throws BudgetAlreadyExistsException
      */
     public function change(Household $household, Budget $budget, array $data): Budget
@@ -87,7 +92,7 @@ class BudgetService
         $month = $budget->month;
 
         if (array_key_exists('category_id', $data)) {
-            $categoryId = $this->resolveCategory($household, $data['category_id'])->id;
+            $categoryId = $this->resolveExpenseCategory($household, $data['category_id'])->id;
             $attributes['category_id'] = $categoryId;
         }
 
@@ -280,13 +285,16 @@ class BudgetService
     }
 
     /**
-     * Resolve a category strictly inside the household. A missing,
-     * foreign, or deleted category surfaces identically as not found,
-     * so callers cannot probe other households' categories.
+     * Resolve a category strictly inside the household and require the
+     * expense type. A missing, foreign, or deleted category surfaces
+     * identically as not found, so callers cannot probe other
+     * households' categories. Legacy untyped categories are rejected
+     * fail-closed: a target must never attach to an income semantic.
      *
      * @throws CategoryNotFoundException
+     * @throws CategoryTypeMismatchException
      */
-    private function resolveCategory(Household $household, ?string $categoryId): Category
+    private function resolveExpenseCategory(Household $household, ?string $categoryId): Category
     {
         $category = $categoryId === null
             ? null
@@ -294,6 +302,10 @@ class BudgetService
 
         if ($category === null) {
             throw new CategoryNotFoundException;
+        }
+
+        if ($category->type !== Category::TYPE_EXPENSE) {
+            throw new CategoryTypeMismatchException('Budget requires an expense category.');
         }
 
         return $category;

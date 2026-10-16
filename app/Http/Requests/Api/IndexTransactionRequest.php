@@ -26,7 +26,7 @@ class IndexTransactionRequest extends FormRequest
             'date_from' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
             'date_to' => ['sometimes', 'nullable', 'date_format:Y-m-d', 'after_or_equal:date_from'],
             'category_id' => ['sometimes', 'nullable', 'string', 'ulid'],
-            'type' => ['sometimes', 'nullable', 'string', 'in:income,expense'],
+            'type' => ['sometimes', 'nullable', 'string', 'in:income,expense,transfer'],
             'sort_by' => ['sometimes', 'nullable', 'string', 'in:occurred_on,amount,created_at'],
             'sort_dir' => ['sometimes', 'nullable', 'string', 'in:asc,desc'],
             'per_page' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:100'],

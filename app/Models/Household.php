@@ -29,6 +29,11 @@ class Household extends Model
         return $this->hasMany(Category::class);
     }
 
+    public function wallets(): HasMany
+    {
+        return $this->hasMany(Wallet::class);
+    }
+
     public function transactions(): HasMany
     {
         return $this->hasMany(Transaction::class);
