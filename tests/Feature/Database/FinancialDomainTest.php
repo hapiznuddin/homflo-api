@@ -38,18 +38,26 @@ describe('financial domain foundation', function () {
     });
 
     test('migration rolls back and re-runs safely', function () {
-        // The newest migration batch owns the wallet tables; rolling back
-        // one step must remove them while leaving the older financial
-        // foundation untouched, and re-running must restore them.
+        // The newest migration step owns the latest schema addition
+        // (the 14.3.2 recurrence columns and partial unique index);
+        // rolling it back must remove exactly that addition while
+        // leaving the older financial foundation — including the wallet
+        // tables — untouched, and re-running must restore it.
+        expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
+        expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
+
+        $this->artisan('migrate:rollback', ['--step' => 2]);
+
+        expect(Schema::hasTable('bill_recurrences'))->toBeFalse();
+        expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeFalse();
+        expect(Schema::hasColumn('bills', 'recurrence_period'))->toBeFalse();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
-
-        $this->artisan('migrate:rollback', ['--step' => 1]);
-
-        expect(Schema::hasTable('wallet_adjustments'))->toBeFalse();
         expect(Schema::hasTable('files'))->toBeTrue();
 
         $this->artisan('migrate');
 
+        expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
+        expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
     });
 

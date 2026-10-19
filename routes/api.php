@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\BillController;
 use App\Http\Controllers\Api\BudgetController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DashboardController;
@@ -51,6 +52,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // writes follow the deferred mandatory verification rule.
     Route::get('/budgets', [BudgetController::class, 'index']);
     Route::get('/budgets/{budget}', [BudgetController::class, 'show']);
+
+    // Bill reads are available to any household member, like the other
+    // finance reads. Payment status/amounts are derived per request from
+    // transaction rows — never stored on the bill — and archived bills
+    // stay hidden unless include_archived is set.
+    Route::get('/bills', [BillController::class, 'index']);
+    Route::get('/bills/{bill}', [BillController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -88,6 +96,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/wallets/{wallet}/deactivate', [WalletController::class, 'deactivate']);
         Route::delete('/wallets/{wallet}', [WalletController::class, 'destroy']);
         Route::post('/wallets/{wallet}/adjustments', [WalletController::class, 'adjust']);
+
+        // Bill writes are owner-only financial mutations behind the
+        // deferred mandatory verification rule. Archive is a dedicated
+        // one-way endpoint (wallet-deactivate precedent): paid bills
+        // never edit or delete again, and unpaid period deletion is a
+        // permanent skip. All schedule changes (D-07) go through the
+        // dedicated recurrence PATCH — there is no recurrence GET or
+        // DELETE: disable a schedule with is_active=false instead.
+        Route::post('/bills', [BillController::class, 'store']);
+        Route::patch('/bills/{bill}', [BillController::class, 'update']);
+        Route::delete('/bills/{bill}', [BillController::class, 'destroy']);
+        Route::post('/bills/{bill}/archive', [BillController::class, 'archive']);
+        Route::patch('/bills/recurrences/{recurrence}', [BillController::class, 'updateRecurrence']);
     });
 });
 

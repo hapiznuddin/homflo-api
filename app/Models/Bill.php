@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class Bill extends Model
 {
@@ -22,6 +23,8 @@ class Bill extends Model
         'due_date',
         'is_active',
         'notes',
+        'recurrence_id',
+        'recurrence_period',
     ];
 
     protected function casts(): array
@@ -30,6 +33,7 @@ class Bill extends Model
             'amount' => 'decimal:2',
             'due_date' => 'date',
             'is_active' => 'boolean',
+            'recurrence_period' => 'date',
         ];
     }
 
@@ -41,6 +45,30 @@ class Bill extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(Category::class);
+    }
+
+    /**
+     * Parent schedule definition; null for one-time bills (including
+     * every legacy row — no backfill).
+     */
+    public function recurrence(): BelongsTo
+    {
+        return $this->belongsTo(BillRecurrence::class, 'recurrence_id');
+    }
+
+    /**
+     * Linked payment rows. Payment = one expense transaction whose
+     * source morph points at this bill; scoped to the bill's household
+     * and expense type so the relation always agrees with the grouped
+     * aggregates used for paid_amount/payment_count/status.
+     *
+     * @return MorphMany<int, Transaction>
+     */
+    public function payments(): MorphMany
+    {
+        return $this->morphMany(Transaction::class, 'source')
+            ->where('household_id', $this->household_id)
+            ->where('type', Transaction::TYPE_EXPENSE);
     }
 
     /**
