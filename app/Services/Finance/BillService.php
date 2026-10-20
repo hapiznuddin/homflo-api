@@ -3,17 +3,24 @@
 namespace App\Services\Finance;
 
 use App\Exceptions\BillAlreadyPaidException;
+use App\Exceptions\BillArchivedException;
 use App\Exceptions\BillNotPaidException;
 use App\Exceptions\BillPeriodAlreadyExistsException;
 use App\Exceptions\CategoryNotFoundException;
 use App\Exceptions\CategoryTypeMismatchException;
+use App\Exceptions\InsufficientFundsException;
+use App\Exceptions\WalletNotFoundException;
 use App\Models\Bill;
 use App\Models\BillRecurrence;
 use App\Models\Category;
 use App\Models\Household;
+use App\Models\Transaction;
 use App\Repositories\Contracts\BillRepositoryInterface;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
+use App\Repositories\Contracts\TransactionRepositoryInterface;
+use App\Repositories\Contracts\WalletRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -36,6 +43,8 @@ class BillService
     public function __construct(
         private readonly BillRepositoryInterface $bills,
         private readonly CategoryRepositoryInterface $categories,
+        private readonly TransactionRepositoryInterface $transactions,
+        private readonly WalletRepositoryInterface $wallets,
     ) {}
 
     /**
@@ -187,7 +196,10 @@ class BillService
     /**
      * Edit one bill (local override; never the schedule template).
      * Paid bills are refused before any field is applied — including an
-     * empty body (deterministic lifecycle guard).
+     * empty body (deterministic lifecycle guard). The bill row is
+     * locked and the paid guard re-read inside one transaction (P3-2
+     * fix), so a payment racing this edit serializes on the row lock:
+     * whichever commits second sees the other's committed state.
      *
      * @param  array{title?: string, amount?: mixed, due_date?: ?string, category_id?: ?string, notes?: ?string}  $data
      *
@@ -197,32 +209,36 @@ class BillService
      */
     public function change(Household $household, Bill $bill, array $data): Bill
     {
-        $this->guardNotPaid($household, $bill);
+        $updated = DB::transaction(function () use ($household, $bill, $data): Bill {
+            $locked = $this->lockOrDiscard($household, $bill);
 
-        $attributes = [];
+            $this->guardNotPaid($household, $locked);
 
-        if (array_key_exists('category_id', $data)) {
-            $category = $this->resolveCategory($household, $data['category_id']);
-            $attributes['category_id'] = $category?->id;
-        }
+            $attributes = [];
 
-        if (array_key_exists('title', $data)) {
-            $attributes['title'] = $data['title'];
-        }
+            if (array_key_exists('category_id', $data)) {
+                $category = $this->resolveCategory($household, $data['category_id']);
+                $attributes['category_id'] = $category?->id;
+            }
 
-        if (array_key_exists('amount', $data)) {
-            $attributes['amount'] = $this->normalizeAmount($data['amount']);
-        }
+            if (array_key_exists('title', $data)) {
+                $attributes['title'] = $data['title'];
+            }
 
-        if (array_key_exists('due_date', $data)) {
-            $attributes['due_date'] = $data['due_date'];
-        }
+            if (array_key_exists('amount', $data)) {
+                $attributes['amount'] = $this->normalizeAmount($data['amount']);
+            }
 
-        if (array_key_exists('notes', $data)) {
-            $attributes['notes'] = $data['notes'];
-        }
+            if (array_key_exists('due_date', $data)) {
+                $attributes['due_date'] = $data['due_date'];
+            }
 
-        $updated = $this->bills->update($bill, $attributes);
+            if (array_key_exists('notes', $data)) {
+                $attributes['notes'] = $data['notes'];
+            }
+
+            return $this->bills->update($locked, $attributes);
+        });
 
         $this->sweepHouseholdRecurrences($household);
 
@@ -233,15 +249,21 @@ class BillService
      * Delete one unpaid bill. For a period bill this is the permanent
      * skip (D-05): the cursor never rewinds, so the period never comes
      * back. Transactions are never touched (paid bills cannot reach
-     * this method).
+     * this method). The paid guard re-reads under the row lock inside
+     * one transaction (P3-2 fix), so a payment racing this delete can
+     * never be orphaned: exactly one of the two writers wins the lock.
      *
      * @throws BillAlreadyPaidException
      */
     public function remove(Household $household, Bill $bill): void
     {
-        $this->guardNotPaid($household, $bill);
+        DB::transaction(function () use ($household, $bill): void {
+            $locked = $this->lockOrDiscard($household, $bill);
 
-        $this->bills->delete($bill);
+            $this->guardNotPaid($household, $locked);
+
+            $this->bills->delete($locked);
+        });
 
         $this->sweepHouseholdRecurrences($household);
     }
@@ -249,27 +271,157 @@ class BillService
     /**
      * Archive a paid bill (one-way, wallet-deactivate precedent).
      * Idempotent on an already archived bill. Touches no transaction,
-     * balance, or aggregate.
+     * balance, or aggregate. The paid check and the flip both run
+     * under the row lock in one transaction (P3-2 fix): a payment
+     * racing this archive serializes on the bill row.
      *
      * @throws BillNotPaidException
      */
     public function archive(Household $household, Bill $bill): Bill
     {
-        $aggregates = $this->bills->paymentAggregatesForHousehold($household, [$bill->id]);
+        $changed = false;
 
-        if (($aggregates[$bill->id]['count'] ?? 0) < 1) {
-            throw new BillNotPaidException;
+        $archived = DB::transaction(function () use ($household, $bill, &$changed): Bill {
+            $locked = $this->lockOrDiscard($household, $bill);
+
+            $aggregates = $this->bills->paymentAggregatesForHousehold($household, [$locked->id]);
+
+            if (($aggregates[$locked->id]['count'] ?? 0) < 1) {
+                throw new BillNotPaidException;
+            }
+
+            if (! $locked->is_active) {
+                return $locked;
+            }
+
+            $changed = true;
+
+            return $this->bills->update($locked, ['is_active' => false]);
+        });
+
+        if ($changed) {
+            $this->sweepHouseholdRecurrences($household);
         }
 
-        if (! $bill->is_active) {
-            return $bill;
-        }
+        return $archived;
+    }
 
-        $archived = $this->bills->update($bill, ['is_active' => false]);
+    /**
+     * Pay a bill in full (frozen contract §4.5/§6): one atomic
+     * transaction that locks the bill row, re-checks lifecycle state
+     * inside the lock (no double payment, no payment on archived
+     * bills), resolves the inherited category fail-closed, locks the
+     * posting wallet, verifies the resulting balance stays
+     * non-negative in integer cents, and inserts exactly one expense
+     * row carrying the bill as its morph source. Any failure rolls
+     * the whole sequence back — no partial row, no balance change
+     * (balances are derived from rows).
+     *
+     * The recurrence sweep (D-04 trigger) runs in its own transactions
+     * only AFTER this commit (T-4): a sweep failure can never undo a
+     * committed payment, and the sweep stays idempotent for the next
+     * owner write. This also keeps the global lock order R → B → W
+     * intact: no transaction ever holds a bill row while waiting for a
+     * recurrence lock.
+     *
+     * @param  array{wallet_id: string, occurred_on?: ?string}  $data
+     *
+     * @throws BillAlreadyPaidException
+     * @throws BillArchivedException
+     * @throws CategoryNotFoundException
+     * @throws CategoryTypeMismatchException
+     * @throws WalletNotFoundException
+     * @throws InsufficientFundsException
+     */
+    public function pay(Household $household, Bill $bill, array $data): Transaction
+    {
+        $payment = DB::transaction(function () use ($household, $bill, $data): Transaction {
+            $locked = $this->lockOrDiscard($household, $bill);
+
+            if (! $locked->is_active) {
+                throw new BillArchivedException;
+            }
+
+            $aggregates = $this->bills->paymentAggregatesForHousehold($household, [$locked->id]);
+            $aggregate = $aggregates[$locked->id] ?? ['sum' => null, 'count' => 0];
+
+            if ((int) $aggregate['count'] >= 1) {
+                throw new BillAlreadyPaidException;
+            }
+
+            // Frozen formula: server-computed from the fresh row under
+            // the lock — the client never supplies an amount.
+            $amount = LedgerMath::sub(
+                $this->normalizeDecimal($locked->amount),
+                $this->normalizeDecimal($aggregate['sum']),
+            );
+
+            // Inherited category, fail-closed re-resolution: drop the
+            // stale relation first so a concurrent category change is
+            // seen, then reject missing/foreign/non-expense the same
+            // way bill creation does.
+            $locked->unsetRelation('category');
+            $category = $this->resolveCategory($household, $locked->category_id);
+
+            $occurredOn = $data['occurred_on'] ?? PeriodBounds::businessToday();
+
+            $lockedWallets = $this->wallets->findLockedByIdsForHousehold($household, [(string) $data['wallet_id']]);
+
+            if ($lockedWallets->count() !== 1) {
+                throw new WalletNotFoundException;
+            }
+
+            $wallet = $lockedWallets->first();
+
+            if (! $wallet->is_active) {
+                throw new WalletNotFoundException('Wallet is not active.');
+            }
+
+            $balances = $this->wallets->balancesFor($household, $lockedWallets);
+            $projected = LedgerMath::fromCents(
+                LedgerMath::toCents($balances[$wallet->id] ?? '0.00') - LedgerMath::toCents($amount),
+            );
+
+            if (LedgerMath::isNegative($projected)) {
+                throw new InsufficientFundsException;
+            }
+
+            return $this->transactions->create([
+                'household_id' => $household->id,
+                'category_id' => $category?->id,
+                'wallet_id' => $wallet->id,
+                'type' => Transaction::TYPE_EXPENSE,
+                'amount' => $amount,
+                'occurred_on' => $occurredOn,
+                'description' => null,
+                'source_type' => Bill::class,
+                'source_id' => $locked->id,
+            ]);
+        });
 
         $this->sweepHouseholdRecurrences($household);
 
-        return $archived;
+        return $payment;
+    }
+
+    /**
+     * SELECT … FOR UPDATE the bill row inside the caller's
+     * transaction. A null (the row vanished between the controller's
+     * scoped resolve and this lock) surfaces as ModelNotFoundException,
+     * which BillController maps to the 404 BILL_NOT_FOUND envelope —
+     * never a raw framework 404 body.
+     *
+     * @throws ModelNotFoundException
+     */
+    private function lockOrDiscard(Household $household, Bill $bill): Bill
+    {
+        $locked = $this->bills->lockBillForHousehold($household, $bill->id);
+
+        if ($locked === null) {
+            throw (new ModelNotFoundException)->setModel(Bill::class, [$bill->id]);
+        }
+
+        return $locked;
     }
 
     /**

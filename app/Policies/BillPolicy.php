@@ -77,6 +77,20 @@ class BillPolicy
     }
 
     /**
+     * Determine whether the user can pay the bill.
+     *
+     * Owner-only: a payment posts shared household money from a wallet,
+     * exactly like every other finance write. The lifecycle rules
+     * (archived, already paid) are re-checked by the service inside the
+     * bill row lock; members never reach them — the Gate denial maps to
+     * a 404 mask before any 422 could leak the bill's existence.
+     */
+    public function pay(User $user, Bill $bill): bool
+    {
+        return $this->owner($user, $bill->household_id) !== null;
+    }
+
+    /**
      * Resolve membership from server-side data only.
      *
      * Never trust user_id, household_id, or role from client input.

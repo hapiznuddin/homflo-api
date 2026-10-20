@@ -3,11 +3,15 @@
 namespace App\Http\Controllers\Api;
 
 use App\Exceptions\BillAlreadyPaidException;
+use App\Exceptions\BillArchivedException;
 use App\Exceptions\BillNotPaidException;
 use App\Exceptions\CategoryNotFoundException;
 use App\Exceptions\CategoryTypeMismatchException;
+use App\Exceptions\InsufficientFundsException;
+use App\Exceptions\WalletNotFoundException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\IndexBillRequest;
+use App\Http\Requests\Api\PayBillRequest;
 use App\Http\Requests\Api\StoreBillRequest;
 use App\Http\Requests\Api\UpdateBillRecurrenceRequest;
 use App\Http\Requests\Api\UpdateBillRequest;
@@ -19,11 +23,14 @@ use App\Models\Wallet;
 use App\Repositories\Contracts\BillRepositoryInterface;
 use App\Services\Finance\BillService;
 use App\Services\Household\HouseholdService;
+use Illuminate\Database\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Gate;
 
 class BillController extends Controller
 {
+    use PresentsTransactions;
+
     public function __construct(
         private readonly BillService $billService,
         private readonly HouseholdService $householdService,
@@ -201,6 +208,62 @@ class BillController extends Controller
             'success' => true,
             'data' => $this->presentBill($archived, $this->billService->deriveFor($household, $archived)),
         ]);
+    }
+
+    /**
+     * Pay a bill in full (frozen contract §5.7): owner-only + verified,
+     * household-scoped with 404 masking, then one atomic service
+     * transaction (lock → lifecycle recheck → inherited category →
+     * wallet lock → balance check → single expense row). Every lifecycle
+     * 422 is only reachable after scoping and the owner Gate, so no
+     * error can confirm a foreign bill's existence.
+     */
+    public function pay(PayBillRequest $request, Bill $bill): JsonResponse
+    {
+        $resolved = $this->resolveBill($bill);
+
+        if ($resolved === null) {
+            return $this->billNotFound();
+        }
+
+        if (! Gate::allows('pay', $resolved)) {
+            return $this->billNotFound();
+        }
+
+        $household = $resolved->household;
+
+        if ($household === null) {
+            return $this->billNotFound();
+        }
+
+        try {
+            $payment = $this->billService->pay($household, $resolved, $request->validated());
+        } catch (ModelNotFoundException) {
+            // The bill vanished between the scoped resolve and the row
+            // lock — surface the same 404 mask as a missing bill, never
+            // a raw framework error body.
+            return $this->billNotFound();
+        } catch (BillArchivedException $exception) {
+            return $this->unprocessable('BILL_ARCHIVED', $exception->getMessage());
+        } catch (BillAlreadyPaidException $exception) {
+            return $this->unprocessable('BILL_ALREADY_PAID', $exception->getMessage());
+        } catch (CategoryNotFoundException) {
+            return $this->categoryNotFound();
+        } catch (CategoryTypeMismatchException $exception) {
+            return $this->unprocessable('CATEGORY_TYPE_MISMATCH', $exception->getMessage());
+        } catch (WalletNotFoundException) {
+            return $this->walletNotFound();
+        } catch (InsufficientFundsException $exception) {
+            return $this->unprocessable('INSUFFICIENT_FUNDS', $exception->getMessage());
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'payment' => $this->presentTransaction($payment),
+                'bill' => $this->presentBill($resolved, $this->billService->deriveFor($household, $resolved)),
+            ],
+        ], 201);
     }
 
     public function updateRecurrence(UpdateBillRecurrenceRequest $request, BillRecurrence $recurrence): JsonResponse
@@ -418,6 +481,17 @@ class BillController extends Controller
             'error' => [
                 'code' => 'CATEGORY_NOT_FOUND',
                 'message' => 'Category not found.',
+            ],
+        ], 404);
+    }
+
+    private function walletNotFound(): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'error' => [
+                'code' => 'WALLET_NOT_FOUND',
+                'message' => 'Wallet not found.',
             ],
         ], 404);
     }

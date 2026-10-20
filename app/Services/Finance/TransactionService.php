@@ -2,11 +2,13 @@
 
 namespace App\Services\Finance;
 
+use App\Exceptions\BillPaymentImmutableException;
 use App\Exceptions\CategoryNotFoundException;
 use App\Exceptions\CategoryTypeMismatchException;
 use App\Exceptions\InsufficientFundsException;
 use App\Exceptions\InvalidTransferException;
 use App\Exceptions\WalletNotFoundException;
+use App\Models\Bill;
 use App\Models\Category;
 use App\Models\Household;
 use App\Models\Transaction;
@@ -98,6 +100,7 @@ class TransactionService
      *
      * @param  array{type?: string, amount?: mixed, occurred_on?: string, category_id?: ?string, description?: ?string, wallet?: ?string, wallet_id?: ?string, destination_wallet_id?: ?string}  $data
      *
+     * @throws BillPaymentImmutableException
      * @throws CategoryNotFoundException
      * @throws CategoryTypeMismatchException
      * @throws WalletNotFoundException
@@ -106,6 +109,14 @@ class TransactionService
      */
     public function change(Household $household, Transaction $transaction, array $data): Transaction
     {
+        // Bill payments are immutable (frozen contract): the guard reads
+        // the persistent source_type column of the server-resolved row —
+        // never anything from the payload — and fails before any lock is
+        // taken. Generic transactions are untouched by this check.
+        if ($transaction->source_type === Bill::class) {
+            throw new BillPaymentImmutableException;
+        }
+
         $type = $data['type'] ?? $transaction->type;
         $categoryId = array_key_exists('category_id', $data) ? $data['category_id'] : $transaction->category_id;
 
@@ -174,10 +185,17 @@ class TransactionService
     }
 
     /**
+     * @throws BillPaymentImmutableException
      * @throws InsufficientFundsException
      */
     public function remove(Household $household, Transaction $transaction): void
     {
+        // Bill payments are immutable (frozen contract): same fail-fast
+        // guard as change(), on the persistent source_type column.
+        if ($transaction->source_type === Bill::class) {
+            throw new BillPaymentImmutableException;
+        }
+
         $old = $this->postingOf(
             $transaction->type,
             (string) $transaction->amount,

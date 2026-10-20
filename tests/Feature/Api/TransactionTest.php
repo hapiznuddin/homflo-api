@@ -607,10 +607,13 @@ describe('Transactions API validation and persistence', function () {
             'source_wallet',
             'destination_wallet',
             'category',
+            'bill_payment',
             'created_at',
             'updated_at',
         ]);
         expect(array_keys($data['category']))->toEqual(['id', 'name', 'icon']);
+        // D-08: derived morph linkage, nullable, null for non-bill rows.
+        expect($data['bill_payment'])->toBeNull();
     });
 
     test('ledger writes never store derived aggregates', function () {

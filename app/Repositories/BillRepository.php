@@ -41,6 +41,15 @@ class BillRepository implements BillRepositoryInterface
             ->first();
     }
 
+    public function lockBillForHousehold(Household $household, string $billId): ?Bill
+    {
+        return Bill::query()
+            ->where('household_id', $household->id)
+            ->where('id', $billId)
+            ->lockForUpdate()
+            ->first();
+    }
+
     /**
      * @param  array<string, mixed>  $attributes
      */
@@ -208,6 +217,12 @@ class BillRepository implements BillRepositoryInterface
     }
 
     /**
+     * Candidate rows are locked (FOR UPDATE) *before* the payment
+     * recheck (D-R2 / NEW-1 fix): a payment writer racing this path
+     * either commits before the lock — and the fresh recheck excludes
+     * that bill — or waits and finds its bill untouched. Paid and
+     * archived bills are never returned.
+     *
      * @return Collection<int, Bill>
      */
     public function unpaidActivePeriodBills(Household $household, BillRecurrence $recurrence): Collection
@@ -216,6 +231,7 @@ class BillRepository implements BillRepositoryInterface
             ->where('household_id', $household->id)
             ->where('recurrence_id', $recurrence->id)
             ->where('is_active', true)
+            ->lockForUpdate()
             ->get();
 
         if ($active->isEmpty()) {

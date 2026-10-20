@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\BillPaymentImmutableException;
 use App\Exceptions\CategoryNotFoundException;
 use App\Exceptions\CategoryTypeMismatchException;
 use App\Exceptions\InsufficientFundsException;
@@ -22,6 +23,8 @@ use Illuminate\Support\Facades\Gate;
 
 class TransactionController extends Controller
 {
+    use PresentsTransactions;
+
     public function __construct(
         private readonly TransactionService $transactionService,
         private readonly HouseholdService $householdService,
@@ -125,6 +128,8 @@ class TransactionController extends Controller
 
         try {
             $updated = $this->transactionService->change($resolved->household, $resolved, $request->validated());
+        } catch (BillPaymentImmutableException $exception) {
+            return $this->unprocessable('BILL_PAYMENT_LOCKED', $exception->getMessage());
         } catch (CategoryNotFoundException $exception) {
             return $this->categoryNotFound($exception);
         } catch (CategoryTypeMismatchException|InvalidTransferException $exception) {
@@ -155,6 +160,8 @@ class TransactionController extends Controller
 
         try {
             $this->transactionService->remove($resolved->household, $resolved);
+        } catch (BillPaymentImmutableException $exception) {
+            return $this->unprocessable('BILL_PAYMENT_LOCKED', $exception->getMessage());
         } catch (InsufficientFundsException $exception) {
             return $this->unprocessable('INSUFFICIENT_FUNDS', $exception->getMessage());
         }
@@ -195,35 +202,6 @@ class TransactionController extends Controller
         }
 
         return $this->transactions->findByIdForHousehold($household, $transaction->id);
-    }
-
-    /**
-     * @return array{id: string, household_id: string, type: string, amount: string, occurred_on: string, description: ?string, wallet: ?string, wallet_id: ?string, destination_wallet_id: ?string, source_wallet: ?array{id: string, name: string, type: string, is_active: bool}, destination_wallet: ?array{id: string, name: string, type: string, is_active: bool}, category: ?array{id: string, name: string, icon: ?string}, created_at: mixed, updated_at: mixed}
-     */
-    private function presentTransaction(Transaction $transaction): array
-    {
-        $transaction->loadMissing('category', 'sourceWallet', 'destinationWallet');
-
-        return [
-            'id' => $transaction->id,
-            'household_id' => $transaction->household_id,
-            'type' => $transaction->type,
-            'amount' => (string) $transaction->amount,
-            'occurred_on' => $transaction->occurred_on->format('Y-m-d'),
-            'description' => $transaction->description,
-            'wallet' => $transaction->wallet,
-            'wallet_id' => $transaction->wallet_id,
-            'destination_wallet_id' => $transaction->destination_wallet_id,
-            'source_wallet' => $this->presentWalletLink($transaction->sourceWallet),
-            'destination_wallet' => $this->presentWalletLink($transaction->destinationWallet),
-            'category' => $transaction->category === null ? null : [
-                'id' => $transaction->category->id,
-                'name' => $transaction->category->name,
-                'icon' => $transaction->category->icon,
-            ],
-            'created_at' => $transaction->created_at,
-            'updated_at' => $transaction->updated_at,
-        ];
     }
 
     /**

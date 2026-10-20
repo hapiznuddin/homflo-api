@@ -24,6 +24,15 @@ interface BillRepositoryInterface
     public function findByIdForHousehold(Household $household, string $billId): ?Bill;
 
     /**
+     * SELECT ... FOR UPDATE of one bill row inside the caller's
+     * transaction; returns the fresh row so lifecycle rechecks (paid,
+     * archived) happen after the lock is held. Null when the row is
+     * missing or belongs to another household (races with a concurrent
+     * delete surface as not-found, never as a crash).
+     */
+    public function lockBillForHousehold(Household $household, string $billId): ?Bill;
+
+    /**
      * @param  array<string, mixed>  $attributes
      */
     public function create(array $attributes): Bill;
@@ -105,8 +114,10 @@ interface BillRepositoryInterface
 
     /**
      * Propagation targets for D-03: period bills of one series that are
-     * still active (not archived) and have zero payment rows.
-     * Paid and archived bills are never returned.
+     * still active (not archived). Implementations lock the candidate
+     * rows before rechecking payment status (D-R2) so a racing payment
+     * can never be overwritten by propagation. Paid bills are never
+     * returned.
      *
      * @return Collection<int, Bill>
      */

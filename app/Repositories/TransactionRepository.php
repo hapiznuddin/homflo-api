@@ -29,7 +29,7 @@ class TransactionRepository implements TransactionRepositoryInterface
         $direction = $sortDir === 'asc' ? 'asc' : 'desc';
 
         $query = Transaction::query()
-            ->with(['category', 'sourceWallet', 'destinationWallet'])
+            ->with(['category', 'sourceWallet', 'destinationWallet', 'source'])
             ->where('household_id', $household->id);
 
         if (isset($filters['date_from'])) {
@@ -57,7 +57,7 @@ class TransactionRepository implements TransactionRepositoryInterface
     public function findByIdForHousehold(Household $household, string $transactionId): ?Transaction
     {
         return Transaction::query()
-            ->with(['category', 'sourceWallet', 'destinationWallet'])
+            ->with(['category', 'sourceWallet', 'destinationWallet', 'source'])
             ->where('household_id', $household->id)
             ->where('id', $transactionId)
             ->first();

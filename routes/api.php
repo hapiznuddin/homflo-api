@@ -108,6 +108,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/bills/{bill}', [BillController::class, 'update']);
         Route::delete('/bills/{bill}', [BillController::class, 'destroy']);
         Route::post('/bills/{bill}/archive', [BillController::class, 'archive']);
+        // Pay a bill in full: owner-only + verified, one atomic expense
+        // row sourced from the bill. There is no partial payment, no
+        // payment edit, and no payment delete endpoint — payments are
+        // immutable by contract (14.3.1 §5.7).
+        Route::post('/bills/{bill}/payments', [BillController::class, 'pay']);
         Route::patch('/bills/recurrences/{recurrence}', [BillController::class, 'updateRecurrence']);
     });
 });
