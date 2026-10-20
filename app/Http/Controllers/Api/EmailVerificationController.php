@@ -7,6 +7,7 @@ use App\Exceptions\VerificationUserNotFoundException;
 use App\Http\Controllers\Controller;
 use App\Services\Auth\EmailVerificationService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
 class EmailVerificationController extends Controller
@@ -40,7 +41,16 @@ class EmailVerificationController extends Controller
         ], 202);
     }
 
-    public function verify(string $id, string $hash): JsonResponse
+    /**
+     * Process a signed verification link from the verification email.
+     *
+     * Browser requests (email-link clicks) are redirected to the Nuxt
+     * frontend status page; JSON clients keep the API envelope. The
+     * destination comes from the env-driven frontend_url config so
+     * production never points at localhost, and the redirect carries no
+     * token, hash, or session data.
+     */
+    public function verify(Request $request, string $id, string $hash): JsonResponse|RedirectResponse
     {
         try {
             $verified = $this->verificationService->verify($id, $hash);
@@ -60,6 +70,12 @@ class EmailVerificationController extends Controller
                     'message' => $exception->getMessage(),
                 ],
             ], 403);
+        }
+
+        if (! $request->expectsJson()) {
+            return redirect()->away(
+                rtrim((string) config('app.frontend_url'), '/').'/verify-email'
+            );
         }
 
         return response()->json([

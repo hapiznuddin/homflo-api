@@ -18,6 +18,11 @@ function evSignedUrl(User $user, ?string $hash = null, ?DateTimeInterface $expir
     );
 }
 
+function evFrontendVerifyEmailUrl(): string
+{
+    return rtrim((string) config('app.frontend_url'), '/').'/verify-email';
+}
+
 describe('Email verification', function () {
     test('newly registered user has unverified email state', function () {
         $this->postJson('/register', [
@@ -323,5 +328,104 @@ describe('Email verification without session', function () {
         $response->assertJsonPath('data.verified', true);
 
         expect($user->fresh()->email_verified_at)->toEqual($firstVerifiedAt);
+    });
+});
+
+describe('Email verification browser redirect', function () {
+    test('valid link redirects browser to frontend verify-email page', function () {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->get(evSignedUrl($user));
+
+        $response->assertRedirect(evFrontendVerifyEmailUrl());
+
+        expect($user->fresh()->email_verified_at)->not->toBeNull();
+    });
+
+    test('redirect target carries no token, hash, or query', function () {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->get(evSignedUrl($user));
+
+        // assertRedirect matches the full target: any extra query string
+        // or fragment would fail the comparison.
+        $response->assertRedirect(evFrontendVerifyEmailUrl());
+    });
+
+    test('repeated browser verification stays idempotent and redirects', function () {
+        $user = User::factory()->unverified()->create();
+
+        $this->get(evSignedUrl($user))->assertRedirect(evFrontendVerifyEmailUrl());
+
+        $firstVerifiedAt = $user->fresh()->email_verified_at;
+
+        $this->get(evSignedUrl($user))->assertRedirect(evFrontendVerifyEmailUrl());
+
+        expect($user->fresh()->email_verified_at)->toEqual($firstVerifiedAt);
+    });
+
+    test('browser request with tampered signature is rejected without redirect', function () {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->get(evSignedUrl($user).'tampered');
+
+        $response->assertForbidden();
+        $response->assertHeaderMissing('location');
+
+        expect($user->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('browser request with expired link is rejected without redirect', function () {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->get(evSignedUrl($user, null, now()->subMinutes(5)));
+
+        $response->assertForbidden();
+        $response->assertHeaderMissing('location');
+
+        expect($user->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('browser request with mismatched hash is rejected without redirect', function () {
+        $user = User::factory()->unverified()->create();
+        $other = User::factory()->unverified()->create();
+
+        $url = URL::temporarySignedRoute(
+            'api.verification.verify',
+            now()->addMinutes(60),
+            ['id' => $user->getKey(), 'hash' => sha1($other->email)]
+        );
+
+        $response = $this->get($url);
+
+        $response->assertForbidden();
+        $response->assertHeaderMissing('location');
+
+        expect($user->fresh()->email_verified_at)->toBeNull();
+    });
+
+    test('browser request for nonexistent user returns 404 without redirect', function () {
+        $url = URL::temporarySignedRoute(
+            'api.verification.verify',
+            now()->addMinutes(60),
+            ['id' => (string) Str::ulid(), 'hash' => sha1('nobody@example.com')]
+        );
+
+        $response = $this->get($url);
+
+        $response->assertNotFound();
+        $response->assertHeaderMissing('location');
+    });
+
+    test('json clients keep the verification envelope', function () {
+        $user = User::factory()->unverified()->create();
+
+        $response = $this->getJson(evSignedUrl($user));
+
+        $response->assertOk();
+        $response->assertJsonPath('success', true);
+        $response->assertJsonPath('data.verified', true);
+
+        expect($user->fresh()->email_verified_at)->not->toBeNull();
     });
 });
