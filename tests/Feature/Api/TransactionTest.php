@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Bill;
 use App\Models\Budget;
 use App\Models\Category;
 use App\Models\Household;
@@ -642,6 +643,281 @@ describe('Transactions API validation and persistence', function () {
         $this->actingAs($owner)->getJson('/api/transactions')->assertOk();
 
         expect(count(DB::getQueryLog()))->toBeLessThan(10);
+    });
+});
+
+// Phase 15.2.3 (Opsi B): mengunci kontrak HTTP PATCH /api/transactions
+// untuk gerbang transfer & perubahan tipe — sebelumnya hanya teruji di
+// level service. Nol perubahan kontrak: test saja.
+describe('Transactions API update: wallet movement and type changes', function () {
+    test('update moves a transaction across wallets and revalidates both balances', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '1000000.00']);
+        $other = txWallet($household, ['name' => 'Bank Lain', 'opening_balance' => '500000.00']);
+        $transaction = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_EXPENSE,
+            'category_id' => null,
+            'wallet_id' => $wallet->id,
+            'amount' => '150000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        $response = $this->actingAs($owner)->patchJson("/api/transactions/{$transaction->id}", [
+            'wallet_id' => $other->id,
+            'wallet' => 'Bank Lain',
+        ]);
+
+        $response->assertOk()->assertJsonPath('data.wallet_id', $other->id);
+
+        // Delta gabungan atomik: expense lama dilepas dari dompet sumber
+        // dan diterapkan ke dompet baru — kedua sisi divalidasi ulang.
+        expect($transaction->refresh()->wallet_id)->toBe($other->id);
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance'))
+            ->toBe('1000000.00');
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$other->id}")->json('data.balance'))
+            ->toBe('350000.00');
+    });
+
+    test('update converts income into a transfer with two deltas and a null category', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $source = txWallet($household, ['opening_balance' => '1000000.00']);
+        $destination = txWallet($household, ['name' => 'Bank', 'opening_balance' => '250000.00']);
+        $income = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_INCOME,
+            'category_id' => null,
+            'wallet_id' => $source->id,
+            'amount' => '150000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        $response = $this->actingAs($owner)->patchJson("/api/transactions/{$income->id}", [
+            'type' => Transaction::TYPE_TRANSFER,
+            'wallet_id' => $source->id,
+            'destination_wallet_id' => $destination->id,
+            'category_id' => null,
+        ]);
+
+        $response->assertOk();
+        expect($response->json('data.type'))->toBe('transfer');
+        expect($response->json('data.destination_wallet_id'))->toBe($destination->id);
+        expect($response->json('data.category'))->toBeNull();
+
+        // Income +150k di sumber dibatalkan (saldo 1150000 → 1000000)
+        // dan posting transfer baru menerapkannya sebagai keluaran
+        // (−150k): delta gabungan sumber = −300k → 850000; tujuan +150k.
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$source->id}")->json('data.balance'))
+            ->toBe('850000.00');
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$destination->id}")->json('data.balance'))
+            ->toBe('400000.00');
+    });
+
+    test('update converts a transfer into an expense and clears the destination', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $source = txWallet($household, ['opening_balance' => '1000000.00']);
+        $destination = txWallet($household, ['name' => 'Bank', 'opening_balance' => '250000.00']);
+        $transfer = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_TRANSFER,
+            'category_id' => null,
+            'wallet_id' => $source->id,
+            'destination_wallet_id' => $destination->id,
+            'amount' => '100000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        // destination_wallet_id: null WAJIB eksplisit — key absen berarti
+        // tujuan lama terbawa (change() memakai array_key_exists) dan
+        // postingOf menolak destination pada non-transfer.
+        $response = $this->actingAs($owner)->patchJson("/api/transactions/{$transfer->id}", [
+            'type' => Transaction::TYPE_EXPENSE,
+            'wallet_id' => $source->id,
+            'destination_wallet_id' => null,
+            'category_id' => null,
+        ]);
+
+        $response->assertOk();
+        expect($response->json('data.type'))->toBe('expense');
+        expect($response->json('data.destination_wallet_id'))->toBeNull();
+
+        $fresh = $transfer->refresh();
+        expect($fresh->type)->toBe('expense');
+        expect($fresh->destination_wallet_id)->toBeNull();
+
+        // Sumber tetap (expense menggantikan transfer di sisi yang sama);
+        // tujuan kehilangan kredit transfer lama.
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$source->id}")->json('data.balance'))
+            ->toBe('900000.00');
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$destination->id}")->json('data.balance'))
+            ->toBe('250000.00');
+    });
+
+    test('update that would drive a balance negative fails with INSUFFICIENT_FUNDS', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '50000.00']);
+        $expense = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_EXPENSE,
+            'category_id' => null,
+            'wallet_id' => $wallet->id,
+            'amount' => '30000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        $this->actingAs($owner)->patchJson("/api/transactions/{$expense->id}", ['amount' => 100000])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'INSUFFICIENT_FUNDS');
+
+        // Atomik: data & saldo tidak berubah setelah penolakan.
+        expect((string) $expense->refresh()->amount)->toBe('30000.00');
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance'))
+            ->toBe('20000.00');
+    });
+
+    test('update of a non-transfer carrying a destination wallet fails with TRANSACTION_INVALID', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '1000000.00']);
+        $other = txWallet($household, ['name' => 'Bank Lain', 'opening_balance' => '500000.00']);
+        $expense = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_EXPENSE,
+            'category_id' => null,
+            'wallet_id' => $wallet->id,
+            'amount' => '150000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        $this->actingAs($owner)->patchJson("/api/transactions/{$expense->id}", [
+            'destination_wallet_id' => $other->id,
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'TRANSACTION_INVALID');
+
+        expect($expense->refresh()->destination_wallet_id)->toBeNull();
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance'))
+            ->toBe('850000.00');
+    });
+
+    test('update of a transfer without a destination fails with TRANSACTION_INVALID', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $source = txWallet($household, ['opening_balance' => '1000000.00']);
+        $destination = txWallet($household, ['name' => 'Bank', 'opening_balance' => '250000.00']);
+        $transfer = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_TRANSFER,
+            'category_id' => null,
+            'wallet_id' => $source->id,
+            'destination_wallet_id' => $destination->id,
+            'amount' => '100000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        $this->actingAs($owner)->patchJson("/api/transactions/{$transfer->id}", [
+            'destination_wallet_id' => null,
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'TRANSACTION_INVALID');
+
+        $fresh = $transfer->refresh();
+        expect($fresh->type)->toBe('transfer');
+        expect($fresh->destination_wallet_id)->toBe($destination->id);
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$source->id}")->json('data.balance'))
+            ->toBe('900000.00');
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$destination->id}")->json('data.balance'))
+            ->toBe('350000.00');
+    });
+
+    test('update cannot detach a posted wallet', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '1000000.00']);
+        $expense = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_EXPENSE,
+            'category_id' => null,
+            'wallet_id' => $wallet->id,
+            'amount' => '150000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        // Menolak penghapusan dompet terposting: baik lewat validasi
+        // FormRequest (wallet_id tanpa nullable) maupun guard service —
+        // keduanya berujung 422 tanpa mengubah row.
+        $this->actingAs($owner)->patchJson("/api/transactions/{$expense->id}", ['wallet_id' => null])
+            ->assertStatus(422);
+
+        $fresh = $expense->refresh();
+        expect($fresh->wallet_id)->toBe($wallet->id);
+        expect((string) $fresh->amount)->toBe('150000.00');
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance'))
+            ->toBe('850000.00');
+    });
+
+    test('update with a category that no longer matches the new type fails with TRANSACTION_INVALID', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '1000000.00']);
+        $expenseCategory = Category::factory()->for($household)->create(['type' => Category::TYPE_EXPENSE]);
+        $expense = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_EXPENSE,
+            'category_id' => $expenseCategory->id,
+            'wallet_id' => $wallet->id,
+            'amount' => '150000.00',
+            'occurred_on' => '2026-10-05',
+        ]);
+
+        // Kategori tidak dikirim → kategori lama terbawa dan re-pairing
+        // menolak kategori expense pada type income.
+        $this->actingAs($owner)->patchJson("/api/transactions/{$expense->id}", [
+            'type' => Transaction::TYPE_INCOME,
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'TRANSACTION_INVALID');
+
+        $fresh = $expense->refresh();
+        expect($fresh->type)->toBe('expense');
+        expect($fresh->category_id)->toBe($expenseCategory->id);
+    });
+
+    test('update of a bill payment stays locked with BILL_PAYMENT_LOCKED', function () {
+        $owner = User::factory()->create();
+        $household = txHousehold($owner);
+        $wallet = txWallet($household, ['opening_balance' => '1000000.00']);
+        $category = Category::factory()->for($household)->create(['type' => Category::TYPE_EXPENSE]);
+        $bill = Bill::factory()->for($household)->create([
+            'category_id' => $category->id,
+            'title' => 'Internet Rumah',
+            'amount' => '150000.00',
+            'due_date' => '2026-12-05',
+            'is_active' => true,
+        ]);
+        $payment = Transaction::factory()->for($household)->create([
+            'type' => Transaction::TYPE_EXPENSE,
+            'category_id' => $category->id,
+            'wallet_id' => $wallet->id,
+            'amount' => '150000.00',
+            'occurred_on' => '2026-10-10',
+            'source_type' => Bill::class,
+            'source_id' => $bill->id,
+        ]);
+
+        foreach ([
+            ['type' => Transaction::TYPE_TRANSFER],
+            ['amount' => 1],
+            ['wallet_id' => (string) Str::ulid()],
+        ] as $payload) {
+            $this->actingAs($owner)->patchJson("/api/transactions/{$payment->id}", $payload)
+                ->assertStatus(422)
+                ->assertJsonPath('error.code', 'BILL_PAYMENT_LOCKED');
+        }
+
+        $fresh = $payment->refresh();
+        expect($fresh->type)->toBe('expense');
+        expect((string) $fresh->amount)->toBe('150000.00');
+        expect($fresh->wallet_id)->toBe($wallet->id);
+        expect($fresh->source_type)->toBe(Bill::class);
+        expect($this->actingAs($owner)->getJson("/api/wallets/{$wallet->id}")->json('data.balance'))
+            ->toBe('850000.00');
     });
 });
 
