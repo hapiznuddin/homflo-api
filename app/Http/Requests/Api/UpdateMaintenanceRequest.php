@@ -21,8 +21,9 @@ class UpdateMaintenanceRequest extends FormRequest
      * Get the validation rules that apply to the request.
      *
      * Partial update: omitted keys stay untouched. household_id,
-     * completed_at, and any status field remain server-managed and are
-     * never accepted from the payload. When asset_id is supplied it must
+     * completed_at, cancelled_at, and any status field remain
+     * server-managed and are never accepted from the payload. When
+     * asset_id is supplied it must
      * resolve to an asset in the same household (validated in the
      * service, masked as not found), so a record can never point at a
      * foreign asset. location and scheduled_date are not nullable when

@@ -38,19 +38,22 @@ describe('financial domain foundation', function () {
     });
 
     test('migration rolls back and re-runs safely', function () {
-        // The newest migration step owns the latest schema addition
-        // (the 14.3.2 recurrence columns and partial unique index);
-        // rolling it back must remove exactly that addition while
-        // leaving the older financial foundation — including the wallet
-        // tables — untouched, and re-running must restore it.
+        // The newest migration steps own the latest schema additions
+        // (the 16.3.2 maintenance cancelled_at column plus the 14.3.2
+        // recurrence columns and partial unique index); rolling them back
+        // must remove exactly those additions while leaving the older
+        // financial foundation — including the wallet tables — untouched,
+        // and re-running must restore them.
         expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
+        expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
 
-        $this->artisan('migrate:rollback', ['--step' => 2]);
+        $this->artisan('migrate:rollback', ['--step' => 3]);
 
         expect(Schema::hasTable('bill_recurrences'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_period'))->toBeFalse();
+        expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeFalse();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
         expect(Schema::hasTable('files'))->toBeTrue();
 
@@ -58,6 +61,7 @@ describe('financial domain foundation', function () {
 
         expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
+        expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
     });
 

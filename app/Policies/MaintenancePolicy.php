@@ -71,6 +71,16 @@ class MaintenancePolicy
     }
 
     /**
+     * Determine whether the user can cancel the maintenance record.
+     *
+     * Owner-only: cancelling is a shared household lifecycle mutation.
+     */
+    public function cancel(User $user, Maintenance $maintenance): bool
+    {
+        return $this->owner($user, $maintenance->household_id) !== null;
+    }
+
+    /**
      * Resolve membership from server-side data only.
      *
      * Never trust user_id, household_id, or role from client input.

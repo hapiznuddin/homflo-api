@@ -5,6 +5,7 @@ use App\Models\Household;
 use App\Models\HouseholdMember;
 use App\Models\Maintenance;
 use App\Models\User;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 function maintenanceHousehold(User $owner, string $name = 'Rumah Maintenance', string $role = 'owner'): Household
@@ -52,6 +53,7 @@ function maintenanceContractKeys(): array
         'location',
         'scheduled_date',
         'completed_at',
+        'cancelled_at',
         'priority',
         'status',
         'created_at',
@@ -72,6 +74,7 @@ describe('Maintenance API authentication', function () {
         $this->patchJson("/api/maintenance/{$maintenance->id}", ['title' => 'x'])->assertStatus(401);
         $this->deleteJson("/api/maintenance/{$maintenance->id}")->assertStatus(401);
         $this->postJson("/api/maintenance/{$maintenance->id}/complete")->assertStatus(401);
+        $this->postJson("/api/maintenance/{$maintenance->id}/cancel")->assertStatus(401);
 
         expect(Maintenance::find($maintenance->id))->not->toBeNull();
     });
@@ -616,5 +619,291 @@ describe('Maintenance API delete', function () {
         expect(Maintenance::find($maintenance->id))->toBeNull();
         expect(Maintenance::find($other->id))->not->toBeNull();
         expect(Asset::find($asset->id))->not->toBeNull();
+    });
+});
+
+describe('Maintenance API cancellation lifecycle', function () {
+    test('the cancelled_at column exists and defaults to null', function () {
+        expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
+
+        $column = collect(Schema::getColumns('maintenance'))->firstWhere('name', 'cancelled_at');
+
+        expect($column)->not->toBeNull();
+        expect($column['nullable'])->toBeTrue();
+
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $maintenance = Maintenance::factory()->for($household)->create();
+
+        expect($maintenance->refresh()->cancelled_at)->toBeNull();
+        expect($maintenance->lifecycleStatus())->toBe(Maintenance::STATUS_SCHEDULED);
+    });
+
+    test('legacy rows keep their derived status without a backfill', function () {
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+
+        $scheduled = Maintenance::factory()->for($household)->create();
+        $completed = Maintenance::factory()->for($household)->completed()->create();
+
+        expect($scheduled->lifecycleStatus())->toBe('scheduled');
+        expect($completed->lifecycleStatus())->toBe('completed');
+        expect($scheduled->cancelled_at)->toBeNull();
+        expect($completed->cancelled_at)->toBeNull();
+    });
+
+    test('verified owner cancels a scheduled maintenance with a server-set timestamp', function () {
+        $this->travelTo('2026-12-02');
+
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+
+        $response = $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel");
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.status', 'cancelled')
+            ->assertJsonPath('data.cancelled_at', '2026-12-02')
+            ->assertJsonPath('data.completed_at', null);
+
+        $fresh = $maintenance->refresh();
+
+        expect($fresh->cancelled_at?->format('Y-m-d'))->toBe('2026-12-02');
+        expect($fresh->completed_at)->toBeNull();
+    });
+
+    test('member cannot cancel maintenance', function () {
+        $member = User::factory()->create();
+        $household = maintenanceHousehold($member, 'Keluarga', 'member');
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($member)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'MAINTENANCE_NOT_FOUND');
+
+        expect($maintenance->refresh()->cancelled_at)->toBeNull();
+    });
+
+    test('unverified owner cannot cancel maintenance', function () {
+        $owner = User::factory()->unverified()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertStatus(403)
+            ->assertJsonPath('error.code', 'EMAIL_NOT_VERIFIED');
+
+        expect($maintenance->refresh()->cancelled_at)->toBeNull();
+    });
+
+    test('cross-household cancel is masked and never modifies the record', function () {
+        $owner = User::factory()->create();
+        maintenanceHousehold($owner);
+
+        $stranger = User::factory()->create();
+        $foreign = maintenanceHousehold($stranger, 'Asing');
+        $foreignAsset = Asset::factory()->for($foreign)->create();
+        $maintenance = Maintenance::factory()->for($foreign)->create(['asset_id' => $foreignAsset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'MAINTENANCE_NOT_FOUND');
+
+        $fresh = $maintenance->refresh();
+
+        expect($fresh->cancelled_at)->toBeNull();
+        expect($fresh->lifecycleStatus())->toBe('scheduled');
+    });
+
+    test('a completed maintenance cannot be cancelled', function () {
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->completed()->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'MAINTENANCE_ALREADY_COMPLETED');
+
+        $fresh = $maintenance->refresh();
+
+        expect($fresh->cancelled_at)->toBeNull();
+        expect($fresh->lifecycleStatus())->toBe('completed');
+    });
+
+    test('cancelling twice is rejected and keeps the original timestamp', function () {
+        $this->travelTo('2026-12-03');
+
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertOk()
+            ->assertJsonPath('data.cancelled_at', '2026-12-03');
+
+        $this->travelTo('2026-12-04');
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'MAINTENANCE_ALREADY_CANCELLED');
+
+        expect($maintenance->refresh()->cancelled_at?->format('Y-m-d'))->toBe('2026-12-03');
+    });
+
+    test('a cancelled maintenance cannot be completed', function () {
+        $this->travelTo('2026-12-05');
+
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'cancelled');
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/complete")
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'MAINTENANCE_ALREADY_CANCELLED');
+
+        $fresh = $maintenance->refresh();
+
+        expect($fresh->completed_at)->toBeNull();
+        expect($fresh->lifecycleStatus())->toBe('cancelled');
+    });
+
+    test('lifecycle timestamps and status cannot be forged through the payload', function () {
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+
+        $created = $this->actingAs($owner)->postJson('/api/maintenance', maintenancePayload($asset->id, [
+            'cancelled_at' => '2026-01-02',
+            'completed_at' => '2026-01-03',
+            'status' => 'cancelled',
+        ]));
+
+        $created->assertStatus(201)
+            ->assertJsonPath('data.cancelled_at', null)
+            ->assertJsonPath('data.completed_at', null)
+            ->assertJsonPath('data.status', 'scheduled');
+
+        $id = $created->json('data.id');
+
+        $this->actingAs($owner)->patchJson("/api/maintenance/{$id}", [
+            'cancelled_at' => '2026-02-02',
+            'completed_at' => '2026-02-03',
+            'status' => 'completed',
+        ])->assertOk()
+            ->assertJsonPath('data.cancelled_at', null)
+            ->assertJsonPath('data.completed_at', null)
+            ->assertJsonPath('data.status', 'scheduled');
+    });
+
+    test('ordinary field updates do not damage the lifecycle status', function () {
+        $this->travelTo('2026-12-06');
+
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+
+        $cancelled = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+        $completed = Maintenance::factory()->for($household)->completed()->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$cancelled->id}/cancel")->assertOk();
+
+        $this->actingAs($owner)->patchJson("/api/maintenance/{$cancelled->id}", [
+            'title' => 'Diubah setelah cancel',
+            'location' => 'Gudang',
+        ])->assertOk()
+            ->assertJsonPath('data.status', 'cancelled')
+            ->assertJsonPath('data.cancelled_at', '2026-12-06');
+
+        $this->actingAs($owner)->patchJson("/api/maintenance/{$completed->id}", [
+            'title' => 'Diubah setelah complete',
+        ])->assertOk()
+            ->assertJsonPath('data.status', 'completed')
+            ->assertJsonPath('data.cancelled_at', null);
+    });
+
+    test('a cancelled record cannot be reactivated by clearing a timestamp', function () {
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+        $maintenance = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id]);
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")->assertOk();
+
+        $this->actingAs($owner)->patchJson("/api/maintenance/{$maintenance->id}", ['cancelled_at' => null])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'cancelled');
+
+        expect($maintenance->refresh()->cancelled_at)->not->toBeNull();
+    });
+
+    test('list and detail expose a consistent derived status', function () {
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+
+        $scheduled = Maintenance::factory()->for($household)->create(['asset_id' => $asset->id, 'title' => 'Terjadwal']);
+        $completed = Maintenance::factory()->for($household)->completed()->create(['asset_id' => $asset->id, 'title' => 'Selesai']);
+        $cancelled = Maintenance::factory()->for($household)->create([
+            'asset_id' => $asset->id,
+            'title' => 'Dibatalkan',
+            'cancelled_at' => '2026-11-01',
+        ]);
+
+        $list = $this->actingAs($owner)->getJson('/api/maintenance');
+        $list->assertOk();
+
+        $statuses = collect($list->json('data'))->keyBy('id')->map(fn (array $row) => $row['status']);
+
+        expect($statuses[$scheduled->id])->toBe('scheduled');
+        expect($statuses[$completed->id])->toBe('completed');
+        expect($statuses[$cancelled->id])->toBe('cancelled');
+
+        $this->actingAs($owner)->getJson("/api/maintenance/{$cancelled->id}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'cancelled')
+            ->assertJsonPath('data.cancelled_at', '2026-11-01');
+    });
+
+    test('a legacy row with both timestamps resolves safely to cancelled without mutation', function () {
+        $owner = User::factory()->create();
+        $household = maintenanceHousehold($owner);
+        $asset = Asset::factory()->for($household)->create();
+
+        // The API can never produce this state; it models legacy/corrupt data.
+        $maintenance = Maintenance::factory()->for($household)->create([
+            'asset_id' => $asset->id,
+            'completed_at' => '2026-10-01',
+            'cancelled_at' => '2026-10-02',
+        ]);
+
+        expect($maintenance->lifecycleStatus())->toBe('cancelled');
+
+        $this->actingAs($owner)->getJson("/api/maintenance/{$maintenance->id}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'cancelled');
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/cancel")
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'MAINTENANCE_ALREADY_CANCELLED');
+
+        $this->actingAs($owner)->postJson("/api/maintenance/{$maintenance->id}/complete")
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'MAINTENANCE_ALREADY_CANCELLED');
+
+        $fresh = $maintenance->refresh();
+
+        expect($fresh->completed_at?->format('Y-m-d'))->toBe('2026-10-01');
+        expect($fresh->cancelled_at?->format('Y-m-d'))->toBe('2026-10-02');
     });
 });

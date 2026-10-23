@@ -119,16 +119,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/assets/{asset}', [AssetController::class, 'destroy']);
 
         // Maintenance writes are owner-only household mutations behind
-        // the deferred mandatory verification rule. Complete is a
-        // dedicated one-way endpoint (wallet-deactivate precedent):
-        // completed_at is always set server-side and never accepted from
-        // the payload. Reschedule reuses the validated PATCH above — no
-        // separate endpoint. Cancel has no representation in the current
-        // schema and is deliberately absent until a schema decision lands.
+        // the deferred mandatory verification rule. Complete and Cancel
+        // are dedicated one-way endpoints (wallet-deactivate precedent):
+        // completed_at/cancelled_at are always set server-side and never
+        // accepted from the payload. Reschedule reuses the validated PATCH
+        // above — no separate endpoint.
         Route::post('/maintenance', [MaintenanceController::class, 'store']);
         Route::patch('/maintenance/{maintenance}', [MaintenanceController::class, 'update']);
         Route::delete('/maintenance/{maintenance}', [MaintenanceController::class, 'destroy']);
         Route::post('/maintenance/{maintenance}/complete', [MaintenanceController::class, 'complete']);
+        Route::post('/maintenance/{maintenance}/cancel', [MaintenanceController::class, 'cancel']);
 
         // Bill writes are owner-only financial mutations behind the
         // deferred mandatory verification rule. Archive is a dedicated

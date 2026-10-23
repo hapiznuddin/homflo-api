@@ -3,6 +3,7 @@
 namespace App\Services\Maintenance;
 
 use App\Exceptions\AssetNotFoundException;
+use App\Exceptions\MaintenanceAlreadyCancelledException;
 use App\Exceptions\MaintenanceAlreadyCompletedException;
 use App\Models\Asset;
 use App\Models\Household;
@@ -10,6 +11,7 @@ use App\Models\Maintenance;
 use App\Repositories\Contracts\AssetRepositoryInterface;
 use App\Repositories\Contracts\MaintenanceRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 
 class MaintenanceService
 {
@@ -82,18 +84,55 @@ class MaintenanceService
 
     /**
      * Mark a scheduled maintenance as completed. completed_at is always
-     * the server date; repeating the action on an already-completed
-     * record is rejected so the lifecycle stays one-way and consistent.
+     * the server date and the lifecycle transition runs inside a locked
+     * transaction, so concurrent Complete requests cannot double-apply.
+     * Repeating the action on a completed record is rejected, and a
+     * cancelled record can never be completed.
      */
     public function complete(Maintenance $maintenance): Maintenance
     {
-        if ($maintenance->completed_at !== null) {
-            throw new MaintenanceAlreadyCompletedException;
-        }
+        return DB::transaction(function () use ($maintenance) {
+            $locked = $this->lock($maintenance);
 
-        return $this->maintenances->update($maintenance, [
-            'completed_at' => now()->format('Y-m-d'),
-        ]);
+            if ($locked->lifecycleStatus() === Maintenance::STATUS_CANCELLED) {
+                throw new MaintenanceAlreadyCancelledException;
+            }
+
+            if ($locked->lifecycleStatus() === Maintenance::STATUS_COMPLETED) {
+                throw new MaintenanceAlreadyCompletedException;
+            }
+
+            return $this->maintenances->update($locked, [
+                'completed_at' => now()->format('Y-m-d'),
+            ]);
+        });
+    }
+
+    /**
+     * Cancel a scheduled maintenance. cancelled_at is always the server
+     * date and the transition runs inside a locked transaction, so
+     * concurrent Cancel requests cannot double-apply. A completed record
+     * can never be cancelled, and a cancelled record stays cancelled.
+     */
+    public function cancel(Maintenance $maintenance): Maintenance
+    {
+        return DB::transaction(function () use ($maintenance) {
+            $locked = $this->lock($maintenance);
+
+            $status = $locked->lifecycleStatus();
+
+            if ($status === Maintenance::STATUS_COMPLETED) {
+                throw new MaintenanceAlreadyCompletedException;
+            }
+
+            if ($status === Maintenance::STATUS_CANCELLED) {
+                throw new MaintenanceAlreadyCancelledException;
+            }
+
+            return $this->maintenances->update($locked, [
+                'cancelled_at' => now()->format('Y-m-d'),
+            ]);
+        });
     }
 
     /**
@@ -104,6 +143,20 @@ class MaintenanceService
     public function remove(Maintenance $maintenance): void
     {
         $this->maintenances->delete($maintenance);
+    }
+
+    /**
+     * Re-read the row under a `SELECT ... FOR UPDATE` lock so a lifecycle
+     * transition is serialized against concurrent requests. On SQLite
+     * (tests) the lock clause is a no-op but the transaction still keeps
+     * the guard and write atomic.
+     */
+    private function lock(Maintenance $maintenance): Maintenance
+    {
+        return Maintenance::query()
+            ->whereKey($maintenance->id)
+            ->lockForUpdate()
+            ->firstOrFail();
     }
 
     private function resolveAsset(Household $household, string $assetId): Asset

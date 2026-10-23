@@ -20,9 +20,10 @@ class StoreMaintenanceRequest extends FormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * household_id, completed_at, and any status field are never accepted:
-     * ownership and lifecycle come from the server-resolved household
-     * context and the Complete action only. asset_id is required because
+     * household_id, completed_at, cancelled_at, and any status field are
+     * never accepted: ownership and lifecycle come from the server-resolved
+     * household context and the Complete/Cancel actions only. asset_id is
+     * required because
      * household maintenance always belongs to an asset, even though the
      * column stays nullable for the ON DELETE SET NULL detach rule.
      *
