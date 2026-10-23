@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Repositories\AssetRepository;
 use App\Repositories\BillRepository;
 use App\Repositories\BudgetRepository;
 use App\Repositories\CategoryRepository;
+use App\Repositories\Contracts\AssetRepositoryInterface;
 use App\Repositories\Contracts\BillRepositoryInterface;
 use App\Repositories\Contracts\BudgetRepositoryInterface;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
@@ -52,6 +54,10 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             HouseholdInvitationRepositoryInterface::class,
             HouseholdInvitationRepository::class,
+        );
+        $this->app->bind(
+            AssetRepositoryInterface::class,
+            AssetRepository::class,
         );
         $this->app->bind(
             TransactionRepositoryInterface::class,

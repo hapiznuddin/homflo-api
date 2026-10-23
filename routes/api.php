@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\AssetController;
 use App\Http\Controllers\Api\BillController;
 use App\Http\Controllers\Api\BudgetController;
 use App\Http\Controllers\Api\CategoryController;
@@ -59,6 +60,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // stay hidden unless include_archived is set.
     Route::get('/bills', [BillController::class, 'index']);
     Route::get('/bills/{bill}', [BillController::class, 'show']);
+
+    // Asset reads are available to any household member, like the other
+    // household catalogue reads. Every row is scoped through the
+    // server-side household context; cross-household access is masked
+    // as 404.
+    Route::get('/assets', [AssetController::class, 'index']);
+    Route::get('/assets/{asset}', [AssetController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -96,6 +104,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/wallets/{wallet}/deactivate', [WalletController::class, 'deactivate']);
         Route::delete('/wallets/{wallet}', [WalletController::class, 'destroy']);
         Route::post('/wallets/{wallet}/adjustments', [WalletController::class, 'adjust']);
+
+        // Asset writes are owner-only household mutations behind the
+        // deferred mandatory verification rule.
+        Route::post('/assets', [AssetController::class, 'store']);
+        Route::patch('/assets/{asset}', [AssetController::class, 'update']);
+        Route::delete('/assets/{asset}', [AssetController::class, 'destroy']);
 
         // Bill writes are owner-only financial mutations behind the
         // deferred mandatory verification rule. Archive is a dedicated

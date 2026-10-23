@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Models\Asset;
 use App\Models\Bill;
 use App\Models\BillRecurrence;
 use App\Models\Budget;
@@ -10,6 +11,7 @@ use App\Models\Household;
 use App\Models\Transaction;
 use App\Models\Wallet;
 use App\Models\WalletAdjustment;
+use App\Policies\AssetPolicy;
 use App\Policies\BillPolicy;
 use App\Policies\BillRecurrencePolicy;
 use App\Policies\BudgetPolicy;
@@ -45,6 +47,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Budget::class, BudgetPolicy::class);
         Gate::policy(Wallet::class, WalletPolicy::class);
         Gate::policy(WalletAdjustment::class, WalletAdjustmentPolicy::class);
+        Gate::policy(Asset::class, AssetPolicy::class);
         Gate::policy(Bill::class, BillPolicy::class);
         Gate::policy(BillRecurrence::class, BillRecurrencePolicy::class);
 
