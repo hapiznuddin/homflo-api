@@ -9,9 +9,11 @@ use App\Models\Budget;
 use App\Models\Category;
 use App\Models\Household;
 use App\Models\Maintenance;
+use App\Models\ObligationType;
 use App\Models\Transaction;
 use App\Models\Vehicle;
 use App\Models\VehicleMaintenance;
+use App\Models\VehicleObligation;
 use App\Models\Wallet;
 use App\Models\WalletAdjustment;
 use App\Policies\AssetPolicy;
@@ -21,8 +23,10 @@ use App\Policies\BudgetPolicy;
 use App\Policies\CategoryPolicy;
 use App\Policies\HouseholdPolicy;
 use App\Policies\MaintenancePolicy;
+use App\Policies\ObligationTypePolicy;
 use App\Policies\TransactionPolicy;
 use App\Policies\VehicleMaintenancePolicy;
+use App\Policies\VehicleObligationPolicy;
 use App\Policies\VehiclePolicy;
 use App\Policies\WalletAdjustmentPolicy;
 use App\Policies\WalletPolicy;
@@ -59,6 +63,8 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(BillRecurrence::class, BillRecurrencePolicy::class);
         Gate::policy(Vehicle::class, VehiclePolicy::class);
         Gate::policy(VehicleMaintenance::class, VehicleMaintenancePolicy::class);
+        Gate::policy(ObligationType::class, ObligationTypePolicy::class);
+        Gate::policy(VehicleObligation::class, VehicleObligationPolicy::class);
 
         VerifyEmail::createUrlUsing(function (object $notifiable) {
             return URL::temporarySignedRoute(

@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 
 class Household extends Model
 {
@@ -67,6 +68,23 @@ class Household extends Model
     public function vehicles(): HasMany
     {
         return $this->hasMany(Vehicle::class);
+    }
+
+    public function obligationTypes(): HasMany
+    {
+        return $this->hasMany(ObligationType::class);
+    }
+
+    /**
+     * Vehicle obligations are owned through their vehicle. The relation is
+     * exposed for household-scoped reads, while mutations still resolve the
+     * nested vehicle and obligation explicitly.
+     *
+     * @return HasManyThrough<int, VehicleObligation, Vehicle>
+     */
+    public function vehicleObligations(): HasManyThrough
+    {
+        return $this->hasManyThrough(VehicleObligation::class, Vehicle::class);
     }
 
     public function files(): HasMany

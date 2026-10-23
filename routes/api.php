@@ -12,11 +12,13 @@ use App\Http\Controllers\Api\HouseholdMemberController;
 use App\Http\Controllers\Api\InvitationController;
 use App\Http\Controllers\Api\MaintenanceController;
 use App\Http\Controllers\Api\MeController;
+use App\Http\Controllers\Api\ObligationTypeController;
 use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\VehicleController;
 use App\Http\Controllers\Api\VehicleMaintenanceController;
+use App\Http\Controllers\Api\VehicleObligationController;
 use App\Http\Controllers\Api\WalletController;
 use Illuminate\Support\Facades\Route;
 
@@ -86,6 +88,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/vehicles/{vehicle}', [VehicleController::class, 'show']);
     Route::get('/vehicles/{vehicle}/maintenance', [VehicleMaintenanceController::class, 'index']);
     Route::get('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'show']);
+
+    // Obligation types are household configuration: any member may read the
+    // system catalogue plus the household's custom types. Obligations are
+    // nested under their vehicle so a record cannot be read through a vehicle
+    // it does not belong to. Cross-household access is masked as 404.
+    Route::get('/obligation-types', [ObligationTypeController::class, 'index']);
+    Route::get('/vehicles/{vehicle}/obligations', [VehicleObligationController::class, 'index']);
+    Route::get('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -156,6 +166,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'update']);
         Route::delete('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'destroy']);
         Route::post('/vehicles/{vehicle}/maintenance/{maintenance}/complete', [VehicleMaintenanceController::class, 'complete']);
+
+        // Obligation writes are owner-only household mutations behind the
+        // deferred mandatory verification rule. Built-in types are immutable;
+        // only unused custom types can be deleted. Obligation creation can
+        // never move the record to a vehicle outside the nested route.
+        Route::post('/obligation-types', [ObligationTypeController::class, 'store']);
+        Route::patch('/obligation-types/{obligationType}', [ObligationTypeController::class, 'update']);
+        Route::delete('/obligation-types/{obligationType}', [ObligationTypeController::class, 'destroy']);
+        Route::post('/vehicles/{vehicle}/obligations', [VehicleObligationController::class, 'store']);
+        Route::patch('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'update']);
+        Route::delete('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'destroy']);
 
         // Bill writes are owner-only financial mutations behind the
         // deferred mandatory verification rule. Archive is a dedicated

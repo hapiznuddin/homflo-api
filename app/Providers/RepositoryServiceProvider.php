@@ -15,9 +15,11 @@ use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
 use App\Repositories\Contracts\HouseholdRepositoryInterface;
 use App\Repositories\Contracts\MaintenanceRepositoryInterface;
 use App\Repositories\Contracts\OAuthAccountRepositoryInterface;
+use App\Repositories\Contracts\ObligationTypeRepositoryInterface;
 use App\Repositories\Contracts\TransactionRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Repositories\Contracts\VehicleMaintenanceRepositoryInterface;
+use App\Repositories\Contracts\VehicleObligationRepositoryInterface;
 use App\Repositories\Contracts\VehicleRepositoryInterface;
 use App\Repositories\Contracts\WalletAdjustmentRepositoryInterface;
 use App\Repositories\Contracts\WalletRepositoryInterface;
@@ -26,9 +28,11 @@ use App\Repositories\HouseholdMemberRepository;
 use App\Repositories\HouseholdRepository;
 use App\Repositories\MaintenanceRepository;
 use App\Repositories\OAuthAccountRepository;
+use App\Repositories\ObligationTypeRepository;
 use App\Repositories\TransactionRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\VehicleMaintenanceRepository;
+use App\Repositories\VehicleObligationRepository;
 use App\Repositories\VehicleRepository;
 use App\Repositories\WalletAdjustmentRepository;
 use App\Repositories\WalletRepository;
@@ -100,6 +104,14 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             VehicleMaintenanceRepositoryInterface::class,
             VehicleMaintenanceRepository::class,
+        );
+        $this->app->bind(
+            ObligationTypeRepositoryInterface::class,
+            ObligationTypeRepository::class,
+        );
+        $this->app->bind(
+            VehicleObligationRepositoryInterface::class,
+            VehicleObligationRepository::class,
         );
     }
 

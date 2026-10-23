@@ -44,6 +44,11 @@ class Vehicle extends Model
         return $this->hasMany(VehicleMaintenance::class);
     }
 
+    public function obligations(): HasMany
+    {
+        return $this->hasMany(VehicleObligation::class);
+    }
+
     /**
      * @param  Builder<Vehicle>  $query
      */

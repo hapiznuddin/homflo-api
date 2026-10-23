@@ -7,10 +7,12 @@ use App\Models\Category;
 use App\Models\File;
 use App\Models\Household;
 use App\Models\Maintenance;
+use App\Models\ObligationType;
 use App\Models\ShoppingItem;
 use App\Models\Transaction;
 use App\Models\Vehicle;
 use App\Models\VehicleMaintenance;
+use App\Models\VehicleObligation;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Schema;
 
@@ -20,7 +22,7 @@ function financeHousehold(string $name = 'Keluarga Finansial'): Household
 }
 
 describe('financial domain foundation', function () {
-    test('all ten tables exist after migration', function () {
+    test('all twelve tables exist after migration', function () {
         foreach ([
             'categories',
             'transactions',
@@ -32,6 +34,8 @@ describe('financial domain foundation', function () {
             'vehicles',
             'vehicle_maintenance',
             'files',
+            'obligation_types',
+            'vehicle_obligations',
         ] as $table) {
             expect(Schema::hasTable($table))->toBeTrue();
         }
@@ -39,10 +43,10 @@ describe('financial domain foundation', function () {
 
     test('migration rolls back and re-runs safely', function () {
         // The newest migration steps own the latest schema additions
-        // (the 16.4.1 vehicle Information columns plus the 16.3.2
-        // maintenance cancelled_at column plus the 14.3.2 recurrence
-        // columns and partial unique index); rolling them back must remove
-        // exactly those additions while leaving the older financial
+        // (the 16.4.5 obligation tables plus the 16.4.1 vehicle Information
+        // columns, the 16.3.2 maintenance cancelled_at column, and the 14.3.2
+        // recurrence columns and partial unique index); rolling them back must
+        // remove exactly those additions while leaving the older financial
         // foundation — including the wallet tables — untouched, and
         // re-running must restore them.
         expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
@@ -51,8 +55,10 @@ describe('financial domain foundation', function () {
         expect(Schema::hasColumn('vehicles', 'type'))->toBeTrue();
         expect(Schema::hasColumn('vehicles', 'odometer'))->toBeTrue();
         expect(Schema::hasColumn('vehicle_maintenance', 'odometer'))->toBeTrue();
+        expect(Schema::hasTable('obligation_types'))->toBeTrue();
+        expect(Schema::hasTable('vehicle_obligations'))->toBeTrue();
 
-        $this->artisan('migrate:rollback', ['--step' => 5]);
+        $this->artisan('migrate:rollback', ['--step' => 7]);
 
         expect(Schema::hasTable('bill_recurrences'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeFalse();
@@ -61,6 +67,8 @@ describe('financial domain foundation', function () {
         expect(Schema::hasColumn('vehicles', 'type'))->toBeFalse();
         expect(Schema::hasColumn('vehicles', 'odometer'))->toBeFalse();
         expect(Schema::hasColumn('vehicle_maintenance', 'odometer'))->toBeFalse();
+        expect(Schema::hasTable('obligation_types'))->toBeFalse();
+        expect(Schema::hasTable('vehicle_obligations'))->toBeFalse();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
         expect(Schema::hasTable('files'))->toBeTrue();
 
@@ -70,7 +78,10 @@ describe('financial domain foundation', function () {
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
         expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
         expect(Schema::hasColumn('vehicles', 'type'))->toBeTrue();
+        expect(Schema::hasColumn('vehicles', 'odometer'))->toBeTrue();
         expect(Schema::hasColumn('vehicle_maintenance', 'odometer'))->toBeTrue();
+        expect(Schema::hasTable('obligation_types'))->toBeTrue();
+        expect(Schema::hasTable('vehicle_obligations'))->toBeTrue();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
     });
 
@@ -80,6 +91,7 @@ describe('financial domain foundation', function () {
         $asset = Asset::factory()->for($household)->create();
         $vehicle = Vehicle::factory()->for($household)->create();
         $bill = Bill::factory()->for($household)->for($category)->create();
+        $obligationType = ObligationType::factory()->for($household)->create();
 
         $models = [
             $household,
@@ -92,6 +104,10 @@ describe('financial domain foundation', function () {
             Maintenance::factory()->for($household)->for($asset, 'asset')->create(),
             $vehicle,
             VehicleMaintenance::factory()->for($vehicle)->create(),
+            $obligationType,
+            VehicleObligation::factory()->for($vehicle)->create([
+                'obligation_type_id' => $obligationType->id,
+            ]),
             File::factory()->for($household)->for($asset, 'fileable')->create(),
         ];
 
@@ -112,7 +128,11 @@ describe('financial domain foundation', function () {
         ShoppingItem::factory()->for($household)->create();
         Asset::factory()->for($household)->create();
         Maintenance::factory()->for($household)->create();
-        Vehicle::factory()->for($household)->create();
+        $vehicle = Vehicle::factory()->for($household)->create();
+        $obligationType = ObligationType::factory()->for($household)->create();
+        VehicleObligation::factory()->for($vehicle)->create([
+            'obligation_type_id' => $obligationType->id,
+        ]);
         File::factory()->for($household)->for(Asset::factory()->for($household)->create(), 'fileable')->create();
 
         $household->refresh();
@@ -125,6 +145,8 @@ describe('financial domain foundation', function () {
         expect($household->assets)->toHaveCount(2);
         expect($household->maintenances)->toHaveCount(1);
         expect($household->vehicles)->toHaveCount(1);
+        expect($household->obligationTypes)->toHaveCount(1);
+        expect($household->vehicleObligations)->toHaveCount(1);
         expect($household->files)->toHaveCount(1);
     });
 
@@ -141,6 +163,10 @@ describe('financial domain foundation', function () {
             ->create(['source_type' => Bill::class, 'source_id' => $bill->id]);
         $maintenance = Maintenance::factory()->for($household)->for($asset, 'asset')->create();
         $vehicleMaintenance = VehicleMaintenance::factory()->for($vehicle)->create();
+        $obligationType = ObligationType::factory()->for($household)->create();
+        $obligation = VehicleObligation::factory()->for($vehicle)->create([
+            'obligation_type_id' => $obligationType->id,
+        ]);
         $file = File::factory()->for($household)->for($asset, 'fileable')->create();
 
         expect($transaction->household->is($household))->toBeTrue();
@@ -152,6 +178,10 @@ describe('financial domain foundation', function () {
         expect($asset->maintenances)->toHaveCount(1);
         expect($vehicleMaintenance->vehicle->is($vehicle))->toBeTrue();
         expect($vehicle->maintenances)->toHaveCount(1);
+        expect($obligation->vehicle->is($vehicle))->toBeTrue();
+        expect($obligation->obligationType->is($obligationType))->toBeTrue();
+        expect($vehicle->obligations)->toHaveCount(1);
+        expect($obligationType->obligations)->toHaveCount(1);
         expect($file->fileable->is($asset))->toBeTrue();
     });
 
@@ -167,6 +197,15 @@ describe('financial domain foundation', function () {
         // Same name in another household is allowed.
         Category::factory()->for($other)->create(['name' => 'Dapur']);
         expect(Category::forHousehold($other)->count())->toBe(1);
+
+        ObligationType::factory()->for($household)->create(['name' => 'Pajak Daerah']);
+
+        // Custom obligation type names are unique per household.
+        expect(fn () => ObligationType::factory()->for($household)->create(['name' => 'Pajak Daerah']))
+            ->toThrow(QueryException::class);
+
+        // The same custom name may exist in another household.
+        ObligationType::factory()->for($other)->create(['name' => 'Pajak Daerah']);
 
         Budget::factory()->for($household)->for($category)->create(['year' => 2026, 'month' => 10]);
 
@@ -213,6 +252,13 @@ describe('financial domain foundation', function () {
             ->toThrow(QueryException::class);
         expect(fn () => VehicleMaintenance::factory()->create(['vehicle_id' => $ghost]))
             ->toThrow(QueryException::class);
+        expect(fn () => ObligationType::factory()->create(['household_id' => $ghost]))
+            ->toThrow(QueryException::class);
+        expect(fn () => VehicleObligation::factory()->create(['vehicle_id' => $ghost]))
+            ->toThrow(QueryException::class);
+        expect(fn () => VehicleObligation::factory()->create([
+            'obligation_type_id' => '01J0000000000000000000000',
+        ]))->toThrow(QueryException::class);
     });
 
     test('forHousehold scopes isolate each household', function () {
@@ -283,6 +329,35 @@ describe('financial domain foundation', function () {
         expect($columns)->not->toContain('remaining');
     });
 
+    test('vehicle obligations store administrative fields without payment or recurrence', function () {
+        $columns = Schema::getColumnListing('vehicle_obligations');
+
+        expect($columns)->toContain(
+            'id',
+            'vehicle_id',
+            'obligation_type_id',
+            'title',
+            'description',
+            'issued_date',
+            'due_date',
+            'amount',
+            'status',
+            'created_at',
+            'updated_at',
+        );
+        expect($columns)->not->toContain('household_id');
+        expect($columns)->not->toContain('paid_at');
+        expect($columns)->not->toContain('payment_status');
+        expect($columns)->not->toContain('bill_id');
+        expect($columns)->not->toContain('recurrence_id');
+        expect($columns)->not->toContain('frequency');
+        expect($columns)->not->toContain('recurrence_period');
+
+        $typeColumns = Schema::getColumnListing('obligation_types');
+
+        expect($typeColumns)->toContain('id', 'household_id', 'code', 'name', 'is_system');
+    });
+
     test('delete behavior protects financial history', function () {
         $household = financeHousehold();
         $category = Category::factory()->for($household)->create();
@@ -325,14 +400,36 @@ describe('financial domain foundation', function () {
         expect($maintenance2->refresh()->asset_id)->toBeNull();
         expect(Maintenance::find($maintenance2->id))->not->toBeNull();
 
-        // Vehicle deletion removes its dependent service log.
+        // Vehicle deletion removes its dependent service log and obligations,
+        // while the household's custom obligation type remains configuration.
         $household3 = financeHousehold('Ketiga');
         $vehicle3 = Vehicle::factory()->for($household3)->create();
         $vehicleMaintenance3 = VehicleMaintenance::factory()->for($vehicle3)->create();
+        $customType3 = ObligationType::factory()->for($household3)->create();
+        $obligation3 = VehicleObligation::factory()->for($vehicle3)->create([
+            'obligation_type_id' => $customType3->id,
+        ]);
 
         expect(VehicleMaintenance::find($vehicleMaintenance3->id))->not->toBeNull();
+        expect(VehicleObligation::find($obligation3->id))->not->toBeNull();
         $vehicle3->delete();
         expect(VehicleMaintenance::find($vehicleMaintenance3->id))->toBeNull();
+        expect(VehicleObligation::find($obligation3->id))->toBeNull();
+        expect(ObligationType::find($customType3->id))->not->toBeNull();
+
+        // A household delete still cascades custom types and their remaining
+        // obligations, so the type foreign key does not strand household data.
+        $household4 = financeHousehold('Keempat');
+        $vehicle4 = Vehicle::factory()->for($household4)->create();
+        $customType4 = ObligationType::factory()->for($household4)->create();
+        $obligation4 = VehicleObligation::factory()->for($vehicle4)->create([
+            'obligation_type_id' => $customType4->id,
+        ]);
+
+        $household4->delete();
+
+        expect(VehicleObligation::find($obligation4->id))->toBeNull();
+        expect(ObligationType::find($customType4->id))->toBeNull();
 
         // Maintenance rows created earlier are gone with their household.
         expect(Maintenance::find($maintenance->id))->toBeNull();
