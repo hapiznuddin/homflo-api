@@ -25,4 +25,14 @@ class VehicleMaintenanceFactory extends Factory
             'scheduled_date' => fake()->date(),
         ];
     }
+
+    /**
+     * Indicate that the vehicle service is completed.
+     */
+    public function completed(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'completed_at' => fake()->date(),
+        ]);
+    }
 }

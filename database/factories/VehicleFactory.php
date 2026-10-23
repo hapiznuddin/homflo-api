@@ -24,7 +24,9 @@ class VehicleFactory extends Factory
             'brand' => fake()->company(),
             'model' => fake()->words(2, true),
             'year' => fake()->numberBetween(2000, 2026),
+            'type' => fake()->randomElement(['Motor', 'Mobil']),
             'plate_number' => strtoupper(fake()->bothify('? #### ???')),
+            'odometer' => fake()->numberBetween(0, 250000),
         ];
     }
 }

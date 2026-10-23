@@ -17,6 +17,8 @@ use App\Repositories\Contracts\MaintenanceRepositoryInterface;
 use App\Repositories\Contracts\OAuthAccountRepositoryInterface;
 use App\Repositories\Contracts\TransactionRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
+use App\Repositories\Contracts\VehicleMaintenanceRepositoryInterface;
+use App\Repositories\Contracts\VehicleRepositoryInterface;
 use App\Repositories\Contracts\WalletAdjustmentRepositoryInterface;
 use App\Repositories\Contracts\WalletRepositoryInterface;
 use App\Repositories\HouseholdInvitationRepository;
@@ -26,6 +28,8 @@ use App\Repositories\MaintenanceRepository;
 use App\Repositories\OAuthAccountRepository;
 use App\Repositories\TransactionRepository;
 use App\Repositories\UserRepository;
+use App\Repositories\VehicleMaintenanceRepository;
+use App\Repositories\VehicleRepository;
 use App\Repositories\WalletAdjustmentRepository;
 use App\Repositories\WalletRepository;
 use Illuminate\Support\ServiceProvider;
@@ -88,6 +92,14 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             WalletAdjustmentRepositoryInterface::class,
             WalletAdjustmentRepository::class,
+        );
+        $this->app->bind(
+            VehicleRepositoryInterface::class,
+            VehicleRepository::class,
+        );
+        $this->app->bind(
+            VehicleMaintenanceRepositoryInterface::class,
+            VehicleMaintenanceRepository::class,
         );
     }
 

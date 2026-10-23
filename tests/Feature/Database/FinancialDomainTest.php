@@ -39,21 +39,28 @@ describe('financial domain foundation', function () {
 
     test('migration rolls back and re-runs safely', function () {
         // The newest migration steps own the latest schema additions
-        // (the 16.3.2 maintenance cancelled_at column plus the 14.3.2
-        // recurrence columns and partial unique index); rolling them back
-        // must remove exactly those additions while leaving the older
-        // financial foundation — including the wallet tables — untouched,
-        // and re-running must restore them.
+        // (the 16.4.1 vehicle Information columns plus the 16.3.2
+        // maintenance cancelled_at column plus the 14.3.2 recurrence
+        // columns and partial unique index); rolling them back must remove
+        // exactly those additions while leaving the older financial
+        // foundation — including the wallet tables — untouched, and
+        // re-running must restore them.
         expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
         expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
+        expect(Schema::hasColumn('vehicles', 'type'))->toBeTrue();
+        expect(Schema::hasColumn('vehicles', 'odometer'))->toBeTrue();
+        expect(Schema::hasColumn('vehicle_maintenance', 'odometer'))->toBeTrue();
 
-        $this->artisan('migrate:rollback', ['--step' => 3]);
+        $this->artisan('migrate:rollback', ['--step' => 5]);
 
         expect(Schema::hasTable('bill_recurrences'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_period'))->toBeFalse();
         expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeFalse();
+        expect(Schema::hasColumn('vehicles', 'type'))->toBeFalse();
+        expect(Schema::hasColumn('vehicles', 'odometer'))->toBeFalse();
+        expect(Schema::hasColumn('vehicle_maintenance', 'odometer'))->toBeFalse();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
         expect(Schema::hasTable('files'))->toBeTrue();
 
@@ -62,6 +69,8 @@ describe('financial domain foundation', function () {
         expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
         expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
+        expect(Schema::hasColumn('vehicles', 'type'))->toBeTrue();
+        expect(Schema::hasColumn('vehicle_maintenance', 'odometer'))->toBeTrue();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
     });
 

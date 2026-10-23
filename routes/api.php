@@ -15,6 +15,8 @@ use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\TransactionController;
+use App\Http\Controllers\Api\VehicleController;
+use App\Http\Controllers\Api\VehicleMaintenanceController;
 use App\Http\Controllers\Api\WalletController;
 use Illuminate\Support\Facades\Route;
 
@@ -74,6 +76,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // household context; cross-household access is masked as 404.
     Route::get('/maintenance', [MaintenanceController::class, 'index']);
     Route::get('/maintenance/{maintenance}', [MaintenanceController::class, 'show']);
+
+    // Vehicle reads are available to any household member, like the other
+    // household catalogue reads. Every row is scoped through the
+    // server-side household context; cross-household access is masked as
+    // 404. Service records are nested under their vehicle so a record can
+    // never be read through a vehicle it does not belong to.
+    Route::get('/vehicles', [VehicleController::class, 'index']);
+    Route::get('/vehicles/{vehicle}', [VehicleController::class, 'show']);
+    Route::get('/vehicles/{vehicle}/maintenance', [VehicleMaintenanceController::class, 'index']);
+    Route::get('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -129,6 +141,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/maintenance/{maintenance}', [MaintenanceController::class, 'destroy']);
         Route::post('/maintenance/{maintenance}/complete', [MaintenanceController::class, 'complete']);
         Route::post('/maintenance/{maintenance}/cancel', [MaintenanceController::class, 'cancel']);
+
+        // Vehicle writes are owner-only household mutations behind the
+        // deferred mandatory verification rule. A vehicle that still has
+        // service history cannot be deleted, so the log never disappears
+        // silently. Service records are nested under their vehicle. Complete
+        // is a dedicated one-way endpoint (wallet-deactivate precedent):
+        // completed_at is always set server-side and never accepted from
+        // the payload.
+        Route::post('/vehicles', [VehicleController::class, 'store']);
+        Route::patch('/vehicles/{vehicle}', [VehicleController::class, 'update']);
+        Route::delete('/vehicles/{vehicle}', [VehicleController::class, 'destroy']);
+        Route::post('/vehicles/{vehicle}/maintenance', [VehicleMaintenanceController::class, 'store']);
+        Route::patch('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'update']);
+        Route::delete('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'destroy']);
+        Route::post('/vehicles/{vehicle}/maintenance/{maintenance}/complete', [VehicleMaintenanceController::class, 'complete']);
 
         // Bill writes are owner-only financial mutations behind the
         // deferred mandatory verification rule. Archive is a dedicated

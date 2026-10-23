@@ -21,13 +21,16 @@ class Vehicle extends Model
         'brand',
         'model',
         'year',
+        'type',
         'plate_number',
+        'odometer',
     ];
 
     protected function casts(): array
     {
         return [
             'year' => 'integer',
+            'odometer' => 'integer',
         ];
     }
 
