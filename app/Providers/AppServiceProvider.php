@@ -8,6 +8,7 @@ use App\Models\BillRecurrence;
 use App\Models\Budget;
 use App\Models\Category;
 use App\Models\Household;
+use App\Models\Maintenance;
 use App\Models\Transaction;
 use App\Models\Wallet;
 use App\Models\WalletAdjustment;
@@ -17,6 +18,7 @@ use App\Policies\BillRecurrencePolicy;
 use App\Policies\BudgetPolicy;
 use App\Policies\CategoryPolicy;
 use App\Policies\HouseholdPolicy;
+use App\Policies\MaintenancePolicy;
 use App\Policies\TransactionPolicy;
 use App\Policies\WalletAdjustmentPolicy;
 use App\Policies\WalletPolicy;
@@ -48,6 +50,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Wallet::class, WalletPolicy::class);
         Gate::policy(WalletAdjustment::class, WalletAdjustmentPolicy::class);
         Gate::policy(Asset::class, AssetPolicy::class);
+        Gate::policy(Maintenance::class, MaintenancePolicy::class);
         Gate::policy(Bill::class, BillPolicy::class);
         Gate::policy(BillRecurrence::class, BillRecurrencePolicy::class);
 

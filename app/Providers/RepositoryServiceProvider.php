@@ -13,6 +13,7 @@ use App\Repositories\Contracts\CategoryRepositoryInterface;
 use App\Repositories\Contracts\HouseholdInvitationRepositoryInterface;
 use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
 use App\Repositories\Contracts\HouseholdRepositoryInterface;
+use App\Repositories\Contracts\MaintenanceRepositoryInterface;
 use App\Repositories\Contracts\OAuthAccountRepositoryInterface;
 use App\Repositories\Contracts\TransactionRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
@@ -21,6 +22,7 @@ use App\Repositories\Contracts\WalletRepositoryInterface;
 use App\Repositories\HouseholdInvitationRepository;
 use App\Repositories\HouseholdMemberRepository;
 use App\Repositories\HouseholdRepository;
+use App\Repositories\MaintenanceRepository;
 use App\Repositories\OAuthAccountRepository;
 use App\Repositories\TransactionRepository;
 use App\Repositories\UserRepository;
@@ -58,6 +60,10 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->app->bind(
             AssetRepositoryInterface::class,
             AssetRepository::class,
+        );
+        $this->app->bind(
+            MaintenanceRepositoryInterface::class,
+            MaintenanceRepository::class,
         );
         $this->app->bind(
             TransactionRepositoryInterface::class,

@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\HouseholdController;
 use App\Http\Controllers\Api\HouseholdInvitationController;
 use App\Http\Controllers\Api\HouseholdMemberController;
 use App\Http\Controllers\Api\InvitationController;
+use App\Http\Controllers\Api\MaintenanceController;
 use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
@@ -67,6 +68,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // as 404.
     Route::get('/assets', [AssetController::class, 'index']);
     Route::get('/assets/{asset}', [AssetController::class, 'show']);
+
+    // Maintenance reads are available to any household member, like the
+    // other household reads. Every row is scoped through the server-side
+    // household context; cross-household access is masked as 404.
+    Route::get('/maintenance', [MaintenanceController::class, 'index']);
+    Route::get('/maintenance/{maintenance}', [MaintenanceController::class, 'show']);
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -110,6 +117,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/assets', [AssetController::class, 'store']);
         Route::patch('/assets/{asset}', [AssetController::class, 'update']);
         Route::delete('/assets/{asset}', [AssetController::class, 'destroy']);
+
+        // Maintenance writes are owner-only household mutations behind
+        // the deferred mandatory verification rule. Complete is a
+        // dedicated one-way endpoint (wallet-deactivate precedent):
+        // completed_at is always set server-side and never accepted from
+        // the payload. Reschedule reuses the validated PATCH above — no
+        // separate endpoint. Cancel has no representation in the current
+        // schema and is deliberately absent until a schema decision lands.
+        Route::post('/maintenance', [MaintenanceController::class, 'store']);
+        Route::patch('/maintenance/{maintenance}', [MaintenanceController::class, 'update']);
+        Route::delete('/maintenance/{maintenance}', [MaintenanceController::class, 'destroy']);
+        Route::post('/maintenance/{maintenance}/complete', [MaintenanceController::class, 'complete']);
 
         // Bill writes are owner-only financial mutations behind the
         // deferred mandatory verification rule. Archive is a dedicated
