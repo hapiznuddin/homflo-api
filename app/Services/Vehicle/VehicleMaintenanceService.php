@@ -8,6 +8,7 @@ use App\Models\VehicleMaintenance;
 use App\Repositories\Contracts\VehicleMaintenanceRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class VehicleMaintenanceService
 {
@@ -35,13 +36,20 @@ class VehicleMaintenanceService
      */
     public function record(Vehicle $vehicle, array $data): VehicleMaintenance
     {
-        return $this->maintenances->create([
-            'vehicle_id' => $vehicle->id,
-            'title' => $data['title'],
-            'description' => $data['description'] ?? null,
-            'scheduled_date' => $data['scheduled_date'],
-            'odometer' => $data['odometer'] ?? null,
-        ]);
+        return DB::transaction(function () use ($vehicle, $data): VehicleMaintenance {
+            $lockedVehicle = $this->lockVehicle($vehicle->id);
+            $odometer = $data['odometer'] ?? null;
+
+            $this->assertOdometerWithinVehicle($lockedVehicle, $odometer);
+
+            return $this->maintenances->create([
+                'vehicle_id' => $lockedVehicle->id,
+                'title' => $data['title'],
+                'description' => $data['description'] ?? null,
+                'scheduled_date' => $data['scheduled_date'],
+                'odometer' => $odometer,
+            ]);
+        });
     }
 
     /**
@@ -54,19 +62,33 @@ class VehicleMaintenanceService
      */
     public function change(Vehicle $vehicle, VehicleMaintenance $maintenance, array $data): VehicleMaintenance
     {
-        $attributes = [];
+        return DB::transaction(function () use ($vehicle, $maintenance, $data): VehicleMaintenance {
+            $lockedVehicle = $this->lockVehicle($vehicle->id);
 
-        foreach (['title', 'description', 'scheduled_date', 'odometer'] as $field) {
-            if (array_key_exists($field, $data)) {
-                $attributes[$field] = $data[$field];
+            $lockedMaintenance = VehicleMaintenance::query()
+                ->where('vehicle_id', $lockedVehicle->id)
+                ->whereKey($maintenance->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $attributes = [];
+
+            foreach (['title', 'description', 'scheduled_date', 'odometer'] as $field) {
+                if (array_key_exists($field, $data)) {
+                    $attributes[$field] = $data[$field];
+                }
             }
-        }
 
-        if ($attributes === []) {
-            return $maintenance;
-        }
+            if (array_key_exists('odometer', $attributes)) {
+                $this->assertOdometerWithinVehicle($lockedVehicle, $attributes['odometer']);
+            }
 
-        return $this->maintenances->update($maintenance, $attributes);
+            if ($attributes === []) {
+                return $lockedMaintenance;
+            }
+
+            return $this->maintenances->update($lockedMaintenance, $attributes);
+        });
     }
 
     /**
@@ -75,6 +97,41 @@ class VehicleMaintenanceService
     public function remove(VehicleMaintenance $maintenance): void
     {
         $this->maintenances->delete($maintenance);
+    }
+
+    /**
+     * Lock the parent vehicle before any service write. This is the common
+     * first lock for vehicle updates, service inserts, and service updates,
+     * so the odometer check and the write cannot be split by a competing
+     * request. The vehicle row also serializes against vehicle deletion.
+     */
+    private function lockVehicle(string $vehicleId): Vehicle
+    {
+        return Vehicle::query()
+            ->whereKey($vehicleId)
+            ->lockForUpdate()
+            ->firstOrFail();
+    }
+
+    /**
+     * The approved invariant is bidirectional: a service odometer may not
+     * exceed the current vehicle odometer. A null value on either side means
+     * the comparison is not defined, so the existing nullable behavior stays
+     * intact.
+     *
+     * @throws ValidationException
+     */
+    private function assertOdometerWithinVehicle(Vehicle $vehicle, ?int $odometer): void
+    {
+        if ($odometer === null || $vehicle->odometer === null) {
+            return;
+        }
+
+        if ($odometer > $vehicle->odometer) {
+            throw ValidationException::withMessages([
+                'odometer' => ['The service odometer must not be greater than the vehicle odometer.'],
+            ]);
+        }
     }
 
     /**

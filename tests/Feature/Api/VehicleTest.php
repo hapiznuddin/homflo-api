@@ -326,6 +326,47 @@ describe('Vehicles API validation and persistence', function () {
             ->assertJsonPath('data.plate_number', 'B 9999 AAA');
     });
 
+    test('duplicate plate on update is rejected but the current plate is excluded', function () {
+        $owner = User::factory()->create();
+        $household = vehicleHousehold($owner);
+        $first = Vehicle::factory()->for($household)->create(['plate_number' => 'B 1111 AAA']);
+        $second = Vehicle::factory()->for($household)->create(['plate_number' => 'B 2222 BBB']);
+
+        $this->actingAs($owner)->patchJson("/api/vehicles/{$second->id}", [
+            'name' => 'Tidak Boleh',
+            'plate_number' => 'B 1111 AAA',
+        ])->assertStatus(422)
+            ->assertJsonPath('error.code', 'VEHICLE_PLATE_ALREADY_EXISTS');
+
+        expect($second->refresh()->name)->not->toBe('Tidak Boleh');
+        expect($second->plate_number)->toBe('B 2222 BBB');
+
+        $this->actingAs($owner)->patchJson("/api/vehicles/{$second->id}", [
+            'name' => 'Tetap Boleh',
+            'plate_number' => 'B 2222 BBB',
+        ])->assertOk()->assertJsonPath('data.plate_number', 'B 2222 BBB');
+
+        expect($first->refresh()->plate_number)->toBe('B 1111 AAA');
+        expect($second->refresh()->name)->toBe('Tetap Boleh');
+    });
+
+    test('nullable plates remain independent within the same household', function () {
+        $owner = User::factory()->create();
+        $household = vehicleHousehold($owner);
+
+        $this->actingAs($owner)->postJson('/api/vehicles', vehiclePayload([
+            'name' => 'Tanpa Plat A',
+            'plate_number' => null,
+        ]))->assertStatus(201)->assertJsonPath('data.plate_number', null);
+
+        $this->actingAs($owner)->postJson('/api/vehicles', vehiclePayload([
+            'name' => 'Tanpa Plat B',
+            'plate_number' => null,
+        ]))->assertStatus(201)->assertJsonPath('data.plate_number', null);
+
+        expect(Vehicle::where('household_id', $household->id)->whereNull('plate_number')->count())->toBe(2);
+    });
+
     test('household ownership cannot be forged through the payload', function () {
         $owner = User::factory()->create();
         $mine = vehicleHousehold($owner);

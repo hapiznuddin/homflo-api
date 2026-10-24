@@ -10,6 +10,7 @@ use App\Models\Vehicle;
 use App\Repositories\Contracts\VehicleMaintenanceRepositoryInterface;
 use App\Repositories\Contracts\VehicleRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 class VehicleService
@@ -48,16 +49,28 @@ class VehicleService
             throw new VehiclePlateAlreadyExistsException;
         }
 
-        return $this->vehicles->create([
-            'household_id' => $household->id,
-            'name' => $data['name'],
-            'brand' => $data['brand'] ?? null,
-            'model' => $data['model'] ?? null,
-            'year' => $data['year'] ?? null,
-            'type' => $data['type'] ?? null,
-            'plate_number' => $plateNumber,
-            'odometer' => $data['odometer'] ?? null,
-        ]);
+        try {
+            return $this->vehicles->create([
+                'household_id' => $household->id,
+                'name' => $data['name'],
+                'brand' => $data['brand'] ?? null,
+                'model' => $data['model'] ?? null,
+                'year' => $data['year'] ?? null,
+                'type' => $data['type'] ?? null,
+                'plate_number' => $plateNumber,
+                'odometer' => $data['odometer'] ?? null,
+            ]);
+        } catch (UniqueConstraintViolationException $exception) {
+            // The pre-check can lose to a concurrent writer. Confirm that
+            // this is still the plate constraint before translating it; any
+            // other unique violation must keep its original error path.
+            if ($plateNumber !== null
+                && $this->vehicles->existsByPlateForHousehold($household, $plateNumber)) {
+                throw new VehiclePlateAlreadyExistsException;
+            }
+
+            throw $exception;
+        }
     }
 
     /**
@@ -74,28 +87,50 @@ class VehicleService
      */
     public function change(Household $household, Vehicle $vehicle, array $data): Vehicle
     {
-        if (array_key_exists('plate_number', $data) && $data['plate_number'] !== null
-            && $this->vehicles->existsByPlateForHousehold($household, $data['plate_number'], $vehicle->id)) {
-            throw new VehiclePlateAlreadyExistsException;
-        }
+        $plateNumber = $data['plate_number'] ?? null;
+        $odometerProvided = array_key_exists('odometer', $data) && $data['odometer'] !== null;
 
-        if (array_key_exists('odometer', $data) && $data['odometer'] !== null) {
-            $this->assertOdometerNotBelowRecorded($vehicle, (int) $data['odometer']);
-        }
+        try {
+            return DB::transaction(function () use ($household, $vehicle, $data, $plateNumber, $odometerProvided): Vehicle {
+                $locked = Vehicle::query()
+                    ->where('household_id', $household->id)
+                    ->whereKey($vehicle->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-        $attributes = [];
+                if ($plateNumber !== null
+                    && $this->vehicles->existsByPlateForHousehold($household, $plateNumber, $locked->id)) {
+                    throw new VehiclePlateAlreadyExistsException;
+                }
 
-        foreach (['name', 'brand', 'model', 'year', 'type', 'plate_number', 'odometer'] as $field) {
-            if (array_key_exists($field, $data)) {
-                $attributes[$field] = $data[$field];
+                if ($odometerProvided) {
+                    $this->assertOdometerNotBelowRecorded($locked, (int) $data['odometer']);
+                }
+
+                $attributes = [];
+
+                foreach (['name', 'brand', 'model', 'year', 'type', 'plate_number', 'odometer'] as $field) {
+                    if (array_key_exists($field, $data)) {
+                        $attributes[$field] = $data[$field];
+                    }
+                }
+
+                if ($attributes === []) {
+                    return $locked;
+                }
+
+                return $this->vehicles->update($locked, $attributes);
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            // The transaction has rolled back by now, so this check sees the
+            // committed winner and can preserve the documented 422 response.
+            if ($plateNumber !== null
+                && $this->vehicles->existsByPlateForHousehold($household, $plateNumber, $vehicle->id)) {
+                throw new VehiclePlateAlreadyExistsException;
             }
-        }
 
-        if ($attributes === []) {
-            return $vehicle;
+            throw $exception;
         }
-
-        return $this->vehicles->update($vehicle, $attributes);
     }
 
     /**

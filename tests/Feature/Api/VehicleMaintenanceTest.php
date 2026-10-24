@@ -25,7 +25,12 @@ function serviceHousehold(User $owner, string $name = 'Rumah Servis Kendaraan', 
 
 function serviceVehicle(Household $household, array $overrides = []): Vehicle
 {
-    return Vehicle::factory()->for($household)->create($overrides);
+    // Keep the default service payload (50,000 km) inside the vehicle's
+    // odometer so the bidirectional invariant does not make unrelated
+    // tests depend on the factory's random odometer.
+    return Vehicle::factory()->for($household)->create(array_merge([
+        'odometer' => 1000000,
+    ], $overrides));
 }
 
 /**
@@ -451,15 +456,67 @@ describe('Vehicle maintenance API lifecycle and validation', function () {
         expect(Vehicle::find($vehicle->id))->not->toBeNull();
     });
 
-    test('recording a service does not silently rewrite the vehicle odometer', function () {
+    test('a service odometer above the vehicle odometer is rejected without rewriting either side', function () {
         $owner = User::factory()->create();
         $household = serviceHousehold($owner);
         $vehicle = serviceVehicle($household, ['odometer' => 1000]);
 
         $this->actingAs($owner)->postJson("/api/vehicles/{$vehicle->id}/maintenance", servicePayload(['odometer' => 9000]))
-            ->assertStatus(201);
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['odometer']);
 
         expect($vehicle->refresh()->odometer)->toBe(1000);
+        expect(VehicleMaintenance::where('vehicle_id', $vehicle->id)->count())->toBe(0);
+    });
+
+    test('service odometers at or below the vehicle odometer are accepted on create', function () {
+        $owner = User::factory()->create();
+        $household = serviceHousehold($owner);
+        $vehicle = serviceVehicle($household, ['odometer' => 10000]);
+
+        $this->actingAs($owner)->postJson("/api/vehicles/{$vehicle->id}/maintenance", servicePayload(['odometer' => 10000]))
+            ->assertStatus(201)
+            ->assertJsonPath('data.odometer', 10000);
+
+        $this->actingAs($owner)->postJson("/api/vehicles/{$vehicle->id}/maintenance", servicePayload(['title' => 'Servis lebih awal', 'odometer' => 9999]))
+            ->assertStatus(201)
+            ->assertJsonPath('data.odometer', 9999);
+    });
+
+    test('a service update above the vehicle odometer is rejected and leaves the record unchanged', function () {
+        $owner = User::factory()->create();
+        $household = serviceHousehold($owner);
+        $vehicle = serviceVehicle($household, ['odometer' => 10000]);
+        $maintenance = VehicleMaintenance::factory()->for($vehicle)->create([
+            'title' => 'Awal',
+            'odometer' => 5000,
+        ]);
+
+        $this->actingAs($owner)->patchJson("/api/vehicles/{$vehicle->id}/maintenance/{$maintenance->id}", [
+            'title' => 'Diubah',
+            'odometer' => 10001,
+        ])->assertStatus(422)->assertJsonValidationErrors(['odometer']);
+
+        expect($maintenance->refresh()->title)->toBe('Awal');
+        expect($maintenance->odometer)->toBe(5000);
+        expect($vehicle->refresh()->odometer)->toBe(10000);
+    });
+
+    test('nullable service odometers remain valid', function () {
+        $owner = User::factory()->create();
+        $household = serviceHousehold($owner);
+        $vehicle = serviceVehicle($household, ['odometer' => 1000]);
+
+        $this->actingAs($owner)->postJson("/api/vehicles/{$vehicle->id}/maintenance", [
+            'title' => 'Cek rem',
+            'scheduled_date' => '2026-12-20',
+        ])->assertStatus(201)->assertJsonPath('data.odometer', null);
+
+        $maintenance = VehicleMaintenance::factory()->for($vehicle)->create(['odometer' => 500]);
+
+        $this->actingAs($owner)->patchJson("/api/vehicles/{$vehicle->id}/maintenance/{$maintenance->id}", [
+            'odometer' => null,
+        ])->assertOk()->assertJsonPath('data.odometer', null);
     });
 
     test('responses expose only the service contract fields', function () {
