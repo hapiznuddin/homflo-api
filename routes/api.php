@@ -73,6 +73,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/assets', [AssetController::class, 'index']);
     Route::get('/assets/{asset}', [AssetController::class, 'show']);
 
+    // Property reads are available to any household member, like the other
+    // household catalogue reads. Every row is scoped through the
+    // server-side household context; cross-household access is masked
+    // as 404.
+    Route::get('/properties', ['App\Http\Controllers\Api\PropertyController', 'index']);
+    Route::get('/properties/{property}', ['App\Http\Controllers\Api\PropertyController', 'show']);
+
     // Maintenance reads are available to any household member, like the
     // other household reads. Every row is scoped through the server-side
     // household context; cross-household access is masked as 404.
@@ -191,23 +198,30 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/bills/{bill}/archive', [BillController::class, 'archive']);
         // Pay a bill in full: owner-only + verified, one atomic expense
         // row sourced from the bill. There is no partial payment, no
-        // payment edit, and no payment delete endpoint — payments are
-        // immutable by contract (14.3.1 §5.7).
+        # payment edit, and no payment delete endpoint — payments are
+        # immutable by contract (14.3.1 §5.7).
         Route::post('/bills/{bill}/payments', [BillController::class, 'pay']);
         Route::patch('/bills/recurrences/{recurrence}', [BillController::class, 'updateRecurrence']);
+
+        # Property writes are owner-only household mutations behind the
+        # deferred mandatory verification rule.
+        Route::post('/properties', ['App\Http\Controllers\Api\PropertyController', 'store']);
+        Route::patch('/properties/{property}', ['App\Http\Controllers\Api\PropertyController', 'update']);
+        Route::post('/properties/{property}/archive', ['App\Http\Controllers\Api\PropertyController', 'archive']);
+        Route::post('/properties/{property}/restore', ['App\Http\Controllers\Api\PropertyController', 'restore']);
     });
 });
 
-// Email verification links are opened from an email client without a Homflo
-// session, so verification relies on the signed URL itself (integrity +
-// expiry) instead of Sanctum authentication.
+# Email verification links are opened from an email client without a Homflo
+# session, so verification relies on the signed URL itself (integrity +
+# expiry) instead of Sanctum authentication.
 Route::get('/email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])
     ->middleware(['signed', 'throttle:6,1'])
     ->name('api.verification.verify');
 
-// Password recovery must work for users who cannot log in, so these routes
-// stay outside auth:sanctum and email verification. Token security is fully
-// owned by Laravel's password broker.
+# Password recovery must work for users who cannot log in, so these routes
+# stay outside auth:sanctum and email verification. Token security is fully
+# owned by Laravel's password broker.
 Route::post('/password/forgot', [PasswordResetController::class, 'forgot'])
     ->middleware('throttle:6,1');
 Route::post('/password/reset', [PasswordResetController::class, 'reset'])
