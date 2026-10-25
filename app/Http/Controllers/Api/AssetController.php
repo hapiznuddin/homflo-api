@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\PropertyArchivedException;
+use App\Exceptions\PropertyNotFoundException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\StoreAssetRequest;
 use App\Http\Requests\Api\UpdateAssetRequest;
@@ -54,7 +56,13 @@ class AssetController extends Controller
             return $this->householdNotFound();
         }
 
-        $asset = $this->assetService->record($household, $request->validated());
+        try {
+            $asset = $this->assetService->record($household, $request->validated());
+        } catch (PropertyNotFoundException) {
+            return $this->propertyNotFound();
+        } catch (PropertyArchivedException) {
+            return $this->propertyArchived();
+        }
 
         return response()->json([
             'success' => true,
@@ -92,7 +100,13 @@ class AssetController extends Controller
             return $this->assetNotFound();
         }
 
-        $updated = $this->assetService->change($resolved, $request->validated());
+        try {
+            $updated = $this->assetService->change($resolved, $request->validated());
+        } catch (PropertyNotFoundException) {
+            return $this->propertyNotFound();
+        } catch (PropertyArchivedException) {
+            return $this->propertyArchived();
+        }
 
         return response()->json([
             'success' => true,
@@ -153,10 +167,12 @@ class AssetController extends Controller
     }
 
     /**
-     * @return array{id: string, household_id: string, name: string, description: ?string, location: ?string, acquired_on: ?string, acquisition_cost: ?string, created_at: mixed, updated_at: mixed}
+     * @return array{id: string, household_id: string, name: string, description: ?string, location: ?string, acquired_on: ?string, acquisition_cost: ?string, created_at: mixed, updated_at: mixed, property_id: ?string, property: ?array{id: string, name: string, archived_at: mixed}}
      */
     private function presentAsset(Asset $asset): array
     {
+        $property = $asset->property;
+
         return [
             'id' => $asset->id,
             'household_id' => $asset->household_id,
@@ -167,6 +183,12 @@ class AssetController extends Controller
             'acquisition_cost' => $asset->acquisition_cost === null ? null : (string) $asset->acquisition_cost,
             'created_at' => $asset->created_at,
             'updated_at' => $asset->updated_at,
+            'property_id' => $asset->property_id,
+            'property' => $property === null ? null : [
+                'id' => $property->id,
+                'name' => $property->name,
+                'archived_at' => $property->archived_at,
+            ],
         ];
     }
 
@@ -190,5 +212,27 @@ class AssetController extends Controller
                 'message' => 'Asset not found.',
             ],
         ], 404);
+    }
+
+    private function propertyNotFound(): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'error' => [
+                'code' => 'PROPERTY_NOT_FOUND',
+                'message' => 'Property not found.',
+            ],
+        ], 404);
+    }
+
+    private function propertyArchived(): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'error' => [
+                'code' => 'PROPERTY_ARCHIVED',
+                'message' => 'Property is archived and cannot be linked to an asset.',
+            ],
+        ], 409);
     }
 }

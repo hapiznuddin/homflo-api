@@ -29,6 +29,7 @@ class StoreAssetRequest extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:255'],
+            'property_id' => ['sometimes', 'nullable', 'string', 'ulid'],
             'description' => ['sometimes', 'nullable', 'string', 'max:5000'],
             'location' => ['sometimes', 'nullable', 'string', 'max:255'],
             'acquired_on' => ['sometimes', 'nullable', 'date_format:Y-m-d'],

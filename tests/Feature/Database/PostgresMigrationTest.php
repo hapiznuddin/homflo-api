@@ -34,9 +34,19 @@ describe('postgresql migration compatibility', function () {
             'vehicles',
             'vehicle_maintenance',
             'files',
+            'properties',
         ] as $table) {
             expect(Schema::connection('pgsql')->hasTable($table))->toBeTrue();
         }
+
+        expect(Schema::connection('pgsql')->hasColumn('assets', 'property_id'))->toBeTrue();
+
+        $propertyForeignKey = collect(Schema::connection('pgsql')->getForeignKeys('assets'))
+            ->first(fn (array $key) => $key['columns'] === ['property_id']);
+
+        expect($propertyForeignKey)->not->toBeNull();
+        expect($propertyForeignKey['foreign_table'])->toBe('properties');
+        expect($propertyForeignKey['on_delete'])->toBe('set null');
 
         // Smoke: household-scoped insert, exact decimal round-trip, and the
         // two protective delete rules on the real grammar.
@@ -93,6 +103,34 @@ describe('postgresql migration compatibility', function () {
         expect((string) DB::connection('pgsql')->table('transactions')->value('amount'))->toBe('1234567.89');
         expect((string) DB::connection('pgsql')->table('transactions')->value('source_id'))->toBe($billId);
 
+        $propertyId = (string) Str::ulid();
+        $assetId = (string) Str::ulid();
+
+        DB::connection('pgsql')->table('properties')->insert([
+            'id' => $propertyId,
+            'household_id' => $householdId,
+            'name' => 'PG Property',
+            'type' => 'house',
+            'address' => 'PG Address',
+            'ownership_status' => 'owned',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        DB::connection('pgsql')->table('assets')->insert([
+            'id' => $assetId,
+            'household_id' => $householdId,
+            'property_id' => $propertyId,
+            'name' => 'PG Asset',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        DB::connection('pgsql')->table('properties')->where('id', $propertyId)->delete();
+
+        expect(DB::connection('pgsql')->table('assets')->where('id', $assetId)->value('property_id'))->toBeNull();
+
+        DB::connection('pgsql')->table('assets')->where('id', $assetId)->delete();
+
         $restrictHit = false;
 
         try {
@@ -112,9 +150,13 @@ describe('postgresql migration compatibility', function () {
 
         expect(Schema::connection('pgsql')->hasTable('files'))->toBeFalse();
         expect(Schema::connection('pgsql')->hasTable('transactions'))->toBeFalse();
+        expect(Schema::connection('pgsql')->hasTable('properties'))->toBeFalse();
+        expect(Schema::connection('pgsql')->hasColumn('assets', 'property_id'))->toBeFalse();
 
         Artisan::call('migrate', ['--database' => 'pgsql', '--force' => true]);
 
         expect(Schema::connection('pgsql')->hasTable('files'))->toBeTrue();
+        expect(Schema::connection('pgsql')->hasTable('properties'))->toBeTrue();
+        expect(Schema::connection('pgsql')->hasColumn('assets', 'property_id'))->toBeTrue();
     });
 });

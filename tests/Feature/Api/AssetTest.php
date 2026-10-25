@@ -52,6 +52,8 @@ function assetContractKeys(): array
         'acquisition_cost',
         'created_at',
         'updated_at',
+        'property_id',
+        'property',
     ];
 }
 

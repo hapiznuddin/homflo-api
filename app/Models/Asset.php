@@ -17,6 +17,7 @@ class Asset extends Model
 
     protected $fillable = [
         'household_id',
+        'property_id',
         'name',
         'description',
         'location',
@@ -35,6 +36,11 @@ class Asset extends Model
     public function household(): BelongsTo
     {
         return $this->belongsTo(Household::class);
+    }
+
+    public function property(): BelongsTo
+    {
+        return $this->belongsTo(Property::class);
     }
 
     public function maintenances(): HasMany

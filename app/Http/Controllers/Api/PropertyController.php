@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\StorePropertyRequest;
 use App\Http\Requests\Api\UpdatePropertyRequest;
+use App\Models\Household;
 use App\Models\Property;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,14 +15,14 @@ class PropertyController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $household = resolve()->make('App\Services\Household\HouseholdService')
+        $household = app()->make('App\Services\Household\HouseholdService')
             ->resolveUserHouseholdContext($request->user());
 
         if ($household['household'] === null) {
             return $this->householdNotFound();
         }
 
-        $householdModel = \App\Models\Household::query()
+        $householdModel = Household::query()
             ->find($household['household']['id']);
 
         if ($householdModel === null) {
@@ -52,14 +53,14 @@ class PropertyController extends Controller
 
     public function store(StorePropertyRequest $request): JsonResponse
     {
-        $household = resolve()->make('App\Services\Household\HouseholdService')
+        $household = app()->make('App\Services\Household\HouseholdService')
             ->resolveUserHouseholdContext($request->user());
 
         if ($household['household'] === null) {
             return $this->householdNotFound();
         }
 
-        $householdModel = \App\Models\Household::query()
+        $householdModel = Household::query()
             ->find($household['household']['id']);
 
         if ($householdModel === null) {
@@ -204,7 +205,7 @@ class PropertyController extends Controller
 
     private function resolveProperty(Property $property): ?Property
     {
-        $context = resolve()->make('App\Services\Household\HouseholdService')
+        $context = app()->make('App\Services\Household\HouseholdService')
             ->resolveUserHouseholdContext(request()->user());
 
         if ($context['household'] === null) {
