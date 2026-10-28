@@ -25,6 +25,8 @@ describe('postgresql migration compatibility', function () {
             'households',
             'household_members',
             'categories',
+            'lists',
+            'list_items',
             'transactions',
             'budgets',
             'bills',
@@ -151,6 +153,8 @@ describe('postgresql migration compatibility', function () {
         expect(Schema::connection('pgsql')->hasTable('files'))->toBeFalse();
         expect(Schema::connection('pgsql')->hasTable('transactions'))->toBeFalse();
         expect(Schema::connection('pgsql')->hasTable('properties'))->toBeFalse();
+        expect(Schema::connection('pgsql')->hasTable('lists'))->toBeFalse();
+        expect(Schema::connection('pgsql')->hasTable('list_items'))->toBeFalse();
         expect(Schema::connection('pgsql')->hasColumn('assets', 'property_id'))->toBeFalse();
 
         Artisan::call('migrate', ['--database' => 'pgsql', '--force' => true]);
