@@ -10,6 +10,8 @@ use App\Http\Controllers\Api\HouseholdController;
 use App\Http\Controllers\Api\HouseholdInvitationController;
 use App\Http\Controllers\Api\HouseholdMemberController;
 use App\Http\Controllers\Api\InvitationController;
+use App\Http\Controllers\Api\ListController;
+use App\Http\Controllers\Api\ListItemController;
 use App\Http\Controllers\Api\MaintenanceController;
 use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\ObligationTypeController;
@@ -77,8 +79,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // household catalogue reads. Every row is scoped through the
     // server-side household context; cross-household access is masked
     // as 404.
-    Route::get('/properties', ['App\Http\Controllers\Api\PropertyController', 'index']);
-    Route::get('/properties/{property}', ['App\Http\Controllers\Api\PropertyController', 'show']);
+    Route::get('/properties', [PropertyController::class, 'index']);
+    Route::get('/properties/{property}', [PropertyController::class, 'show']);
 
     // Maintenance reads are available to any household member, like the
     // other household reads. Every row is scoped through the server-side
@@ -88,8 +90,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Vehicle reads are available to any household member, like the other
     // household catalogue reads. Every row is scoped through the
-    // server-side household context; cross-household access is masked as
-    // 404. Service records are nested under their vehicle so a record can
+    // server-side household context; cross-household access is masked
+    // as 404. Service records are nested under their vehicle so a record can
     // never be read through a vehicle it does not belong to.
     Route::get('/vehicles', [VehicleController::class, 'index']);
     Route::get('/vehicles/{vehicle}', [VehicleController::class, 'show']);
@@ -103,6 +105,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/obligation-types', [ObligationTypeController::class, 'index']);
     Route::get('/vehicles/{vehicle}/obligations', [VehicleObligationController::class, 'index']);
     Route::get('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'show']);
+
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
@@ -141,87 +144,39 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/wallets/{wallet}', [WalletController::class, 'destroy']);
         Route::post('/wallets/{wallet}/adjustments', [WalletController::class, 'adjust']);
 
-        // Asset writes are owner-only household mutations behind the
-        // deferred mandatory verification rule.
-        Route::post('/assets', [AssetController::class, 'store']);
-        Route::patch('/assets/{asset}', [AssetController::class, 'update']);
-        Route::delete('/assets/{asset}', [AssetController::class, 'destroy']);
+        // List routes - MVP Lists domain
+        Route::get('/lists', [ListController::class, 'index']);
+        Route::get('/lists/default', [ListController::class, 'default']);
+        Route::get('/lists/{list}', [ListController::class, 'show']);
+        Route::get('/lists/{list}/items', [ListItemController::class, 'index']);
 
-        // Maintenance writes are owner-only household mutations behind
-        // the deferred mandatory verification rule. Complete and Cancel
-        // are dedicated one-way endpoints (wallet-deactivate precedent):
-        // completed_at/cancelled_at are always set server-side and never
-        // accepted from the payload. Reschedule reuses the validated PATCH
-        // above — no separate endpoint.
-        Route::post('/maintenance', [MaintenanceController::class, 'store']);
-        Route::patch('/maintenance/{maintenance}', [MaintenanceController::class, 'update']);
-        Route::delete('/maintenance/{maintenance}', [MaintenanceController::class, 'destroy']);
-        Route::post('/maintenance/{maintenance}/complete', [MaintenanceController::class, 'complete']);
-        Route::post('/maintenance/{maintenance}/cancel', [MaintenanceController::class, 'cancel']);
+        // List writes behind verified gate
+        Route::middleware('verified')->group(function () {
+            Route::post('/lists', [ListController::class, 'store']);
+            Route::patch('/lists/{list}', [ListController::class, 'update']);
+            Route::post('/lists/{list}/archive', [ListController::class, 'archive']);
+            Route::post('/lists/{list}/restore', [ListController::class, 'restore']);
 
-        // Vehicle writes are owner-only household mutations behind the
-        // deferred mandatory verification rule. A vehicle that still has
-        // service history cannot be deleted, so the log never disappears
-        // silently. Service records are nested under their vehicle. Complete
-        // is a dedicated one-way endpoint (wallet-deactivate precedent):
-        // completed_at is always set server-side and never accepted from
-        // the payload.
-        Route::post('/vehicles', [VehicleController::class, 'store']);
-        Route::patch('/vehicles/{vehicle}', [VehicleController::class, 'update']);
-        Route::delete('/vehicles/{vehicle}', [VehicleController::class, 'destroy']);
-        Route::post('/vehicles/{vehicle}/maintenance', [VehicleMaintenanceController::class, 'store']);
-        Route::patch('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'update']);
-        Route::delete('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'destroy']);
-        Route::post('/vehicles/{vehicle}/maintenance/{maintenance}/complete', [VehicleMaintenanceController::class, 'complete']);
-
-        // Obligation writes are owner-only household mutations behind the
-        // deferred mandatory verification rule. Built-in types are immutable;
-        // only unused custom types can be deleted. Obligation creation can
-        // never move the record to a vehicle outside the nested route.
-        Route::post('/obligation-types', [ObligationTypeController::class, 'store']);
-        Route::patch('/obligation-types/{obligationType}', [ObligationTypeController::class, 'update']);
-        Route::delete('/obligation-types/{obligationType}', [ObligationTypeController::class, 'destroy']);
-        Route::post('/vehicles/{vehicle}/obligations', [VehicleObligationController::class, 'store']);
-        Route::patch('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'update']);
-        Route::delete('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'destroy']);
-
-        // Bill writes are owner-only financial mutations behind the
-        // deferred mandatory verification rule. Archive is a dedicated
-        // one-way endpoint (wallet-deactivate precedent): paid bills
-        // never edit or delete again, and unpaid period deletion is a
-        // permanent skip. All schedule changes (D-07) go through the
-        // dedicated recurrence PATCH — there is no recurrence GET or
-        // DELETE: disable a schedule with is_active=false instead.
-        Route::post('/bills', [BillController::class, 'store']);
-        Route::patch('/bills/{bill}', [BillController::class, 'update']);
-        Route::delete('/bills/{bill}', [BillController::class, 'destroy']);
-        Route::post('/bills/{bill}/archive', [BillController::class, 'archive']);
-        // Pay a bill in full: owner-only + verified, one atomic expense
-        // row sourced from the bill. There is no partial payment, no
-        # payment edit, and no payment delete endpoint — payments are
-        # immutable by contract (14.3.1 §5.7).
-        Route::post('/bills/{bill}/payments', [BillController::class, 'pay']);
-        Route::patch('/bills/recurrences/{recurrence}', [BillController::class, 'updateRecurrence']);
-
-        # Property writes are owner-only household mutations behind the
-        # deferred mandatory verification rule.
-        Route::post('/properties', ['App\Http\Controllers\Api\PropertyController', 'store']);
-        Route::patch('/properties/{property}', ['App\Http\Controllers\Api\PropertyController', 'update']);
-        Route::post('/properties/{property}/archive', ['App\Http\Controllers\Api\PropertyController', 'archive']);
-        Route::post('/properties/{property}/restore', ['App\Http\Controllers\Api\PropertyController', 'restore']);
+            Route::post('/lists/{list}/items', [ListItemController::class, 'store']);
+            Route::patch('/lists/{list}/items/{item}', [ListItemController::class, 'update']);
+            Route::delete('/lists/{list}/items/{item}', [ListItemController::class, 'destroy']);
+            Route::post('/lists/{list}/items/{item}/complete', [ListItemController::class, 'complete']);
+            Route::post('/lists/{list}/items/{item}/uncomplete', [ListItemController::class, 'uncomplete']);
+            Route::post('/lists/{list}/items/{item}/expense', [ListItemController::class, 'expense']);
+        });
     });
 });
 
-# Email verification links are opened from an email client without a Homflo
-# session, so verification relies on the signed URL itself (integrity +
-# expiry) instead of Sanctum authentication.
+// Email verification links are opened from an email client without a Homflo
+// session, so verification relies on the signed URL itself (integrity +
+// expiry) instead of Sanctum authentication.
 Route::get('/email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])
     ->middleware(['signed', 'throttle:6,1'])
     ->name('api.verification.verify');
 
-# Password recovery must work for users who cannot log in, so these routes
-# stay outside auth:sanctum and email verification. Token security is fully
-# owned by Laravel's password broker.
+// Password recovery must work for users who cannot log in, so these routes
+// stay outside auth:sanctum and email verification. Token security is fully
+// owned by Laravel's password broker.
 Route::post('/password/forgot', [PasswordResetController::class, 'forgot'])
     ->middleware('throttle:6,1');
 Route::post('/password/reset', [PasswordResetController::class, 'reset'])
