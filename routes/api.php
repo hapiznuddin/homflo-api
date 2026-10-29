@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\ObligationTypeController;
 use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\PropertyController;
 use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\VehicleController;
 use App\Http\Controllers\Api\VehicleMaintenanceController;
@@ -143,6 +144,55 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/wallets/{wallet}/deactivate', [WalletController::class, 'deactivate']);
         Route::delete('/wallets/{wallet}', [WalletController::class, 'destroy']);
         Route::post('/wallets/{wallet}/adjustments', [WalletController::class, 'adjust']);
+
+        // Asset writes. Reads stay member-visible; mutations are owner-only
+        // through AssetPolicy and require the verified email gate.
+        Route::post('/assets', [AssetController::class, 'store']);
+        Route::patch('/assets/{asset}', [AssetController::class, 'update']);
+        Route::delete('/assets/{asset}', [AssetController::class, 'destroy']);
+
+        // Bill writes, including lifecycle archive and payment recording.
+        // The recurrence endpoint is static-first so /bills/{bill} can never
+        // swallow /bills/recurrences/{recurrence}.
+        Route::post('/bills', [BillController::class, 'store']);
+        Route::patch('/bills/recurrences/{recurrence}', [BillController::class, 'updateRecurrence']);
+        Route::patch('/bills/{bill}', [BillController::class, 'update']);
+        Route::delete('/bills/{bill}', [BillController::class, 'destroy']);
+        Route::post('/bills/{bill}/archive', [BillController::class, 'archive']);
+        Route::post('/bills/{bill}/payments', [BillController::class, 'pay']);
+
+        // Maintenance writes and lifecycle transitions.
+        Route::post('/maintenance', [MaintenanceController::class, 'store']);
+        Route::patch('/maintenance/{maintenance}', [MaintenanceController::class, 'update']);
+        Route::delete('/maintenance/{maintenance}', [MaintenanceController::class, 'destroy']);
+        Route::post('/maintenance/{maintenance}/complete', [MaintenanceController::class, 'complete']);
+        Route::post('/maintenance/{maintenance}/cancel', [MaintenanceController::class, 'cancel']);
+
+        // Property writes. There is no permanent DELETE: archive/restore own
+        // the lifecycle, and archived rows stay readable.
+        Route::post('/properties', [PropertyController::class, 'store']);
+        Route::patch('/properties/{property}', [PropertyController::class, 'update']);
+        Route::post('/properties/{property}/archive', [PropertyController::class, 'archive']);
+        Route::post('/properties/{property}/restore', [PropertyController::class, 'restore']);
+
+        // Vehicle writes plus nested service and obligation writes. Nested
+        // records are always resolved through their vehicle.
+        Route::post('/vehicles', [VehicleController::class, 'store']);
+        Route::patch('/vehicles/{vehicle}', [VehicleController::class, 'update']);
+        Route::delete('/vehicles/{vehicle}', [VehicleController::class, 'destroy']);
+        Route::post('/vehicles/{vehicle}/maintenance', [VehicleMaintenanceController::class, 'store']);
+        Route::patch('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'update']);
+        Route::delete('/vehicles/{vehicle}/maintenance/{maintenance}', [VehicleMaintenanceController::class, 'destroy']);
+        Route::post('/vehicles/{vehicle}/maintenance/{maintenance}/complete', [VehicleMaintenanceController::class, 'complete']);
+        Route::post('/vehicles/{vehicle}/obligations', [VehicleObligationController::class, 'store']);
+        Route::patch('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'update']);
+        Route::delete('/vehicles/{vehicle}/obligations/{obligation}', [VehicleObligationController::class, 'destroy']);
+
+        // Obligation types are household configuration; only owners may
+        // create, rename, or remove custom types.
+        Route::post('/obligation-types', [ObligationTypeController::class, 'store']);
+        Route::patch('/obligation-types/{obligationType}', [ObligationTypeController::class, 'update']);
+        Route::delete('/obligation-types/{obligationType}', [ObligationTypeController::class, 'destroy']);
 
         // List routes - MVP Lists domain
         Route::get('/lists', [ListController::class, 'index']);

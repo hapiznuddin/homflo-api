@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -35,7 +36,10 @@ return new class extends Migration
     /** Reverse the migrations. */
     public function down(): void
     {
+        // Drop the partial index before the table. SQLite has no
+        // `DROP INDEX ... ON table` syntax, and PostgreSQL accepts the
+        // table-less form as well.
+        DB::statement('DROP INDEX IF EXISTS lists_household_active_order_idx');
         Schema::dropIfExists('lists');
-        DB::statement("DROP INDEX IF EXISTS lists_household_active_order_idx ON lists");
     }
 };

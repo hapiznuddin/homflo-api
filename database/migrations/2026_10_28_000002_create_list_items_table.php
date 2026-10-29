@@ -44,8 +44,10 @@ return new class extends Migration
     /** Reverse the migrations. */
     public function down(): void
     {
+        // Drop partial indexes before the table; SQLite does not accept the
+        // `DROP INDEX ... ON table` form.
+        DB::statement('DROP INDEX IF EXISTS list_items_active_order_idx');
+        DB::statement('DROP INDEX IF EXISTS list_items_completed_order_idx');
         Schema::dropIfExists('list_items');
-        DB::statement("DROP INDEX IF EXISTS list_items_active_order_idx ON list_items");
-        DB::statement("DROP INDEX IF EXISTS list_items_completed_order_idx ON list_items");
     }
 };

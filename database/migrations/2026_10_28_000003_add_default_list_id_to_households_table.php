@@ -18,7 +18,10 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('households', function (Blueprint $table) {
-            $table->dropColumn('default_list_id');
+            // Drop the foreign key together with the column. A plain
+            // dropColumn leaves the constraint pointing at a missing column
+            // on SQLite and aborts the rollback.
+            $table->dropConstrainedForeignId('default_list_id');
         });
     }
 };

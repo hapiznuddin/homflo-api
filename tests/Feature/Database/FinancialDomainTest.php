@@ -42,14 +42,16 @@ describe('financial domain foundation', function () {
     });
 
     test('migration rolls back and re-runs safely', function () {
-        // The newest migration steps own the latest schema additions
-        // (the Property foundation and Asset relation plus the 16.4.5
-        // obligation tables, the 16.4.1 vehicle Information columns, the
-        // 16.3.2 maintenance cancelled_at column, and the 14.3.2 recurrence
-        // columns and partial unique index); rolling them back must remove
-        // exactly those additions while leaving the older financial
-        // foundation — including the wallet tables — untouched, and
-        // re-running must restore them.
+        // The newest migration steps own the latest schema additions:
+        // the Lists foundation (lists, list_items, default_list_id,
+        // backfill, and the list-item expense index), the Property
+        // foundation and Asset relation, the 16.4.5 obligation tables,
+        // the 16.4.1 vehicle Information columns, the 16.3.2 maintenance
+        // cancelled_at column, and the 14.3.2 recurrence columns and
+        // partial unique index. Rolling them back must remove exactly
+        // those additions while leaving the older financial foundation —
+        // including the wallet tables — untouched, and re-running must
+        // restore them.
         expect(Schema::hasTable('bill_recurrences'))->toBeTrue();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeTrue();
         expect(Schema::hasColumn('maintenance', 'cancelled_at'))->toBeTrue();
@@ -60,8 +62,15 @@ describe('financial domain foundation', function () {
         expect(Schema::hasTable('vehicle_obligations'))->toBeTrue();
         expect(Schema::hasTable('properties'))->toBeTrue();
         expect(Schema::hasColumn('assets', 'property_id'))->toBeTrue();
+        expect(Schema::hasTable('lists'))->toBeTrue();
+        expect(Schema::hasTable('list_items'))->toBeTrue();
+        expect(Schema::hasColumn('households', 'default_list_id'))->toBeTrue();
 
-        $this->artisan('migrate:rollback', ['--step' => 9]);
+        // Fourteen migrations cover every addition asserted above: the five
+        // Lists migrations plus the nine pre-Lists additions. The previous
+        // step count (9) predated the Lists foundation and silently left the
+        // recurrence/property/obligation schema in place.
+        $this->artisan('migrate:rollback', ['--step' => 14]);
 
         expect(Schema::hasTable('bill_recurrences'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeFalse();
@@ -74,6 +83,9 @@ describe('financial domain foundation', function () {
         expect(Schema::hasTable('vehicle_obligations'))->toBeFalse();
         expect(Schema::hasTable('properties'))->toBeFalse();
         expect(Schema::hasColumn('assets', 'property_id'))->toBeFalse();
+        expect(Schema::hasTable('lists'))->toBeFalse();
+        expect(Schema::hasTable('list_items'))->toBeFalse();
+        expect(Schema::hasColumn('households', 'default_list_id'))->toBeFalse();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
         expect(Schema::hasTable('files'))->toBeTrue();
 
@@ -89,6 +101,9 @@ describe('financial domain foundation', function () {
         expect(Schema::hasTable('vehicle_obligations'))->toBeTrue();
         expect(Schema::hasTable('properties'))->toBeTrue();
         expect(Schema::hasColumn('assets', 'property_id'))->toBeTrue();
+        expect(Schema::hasTable('lists'))->toBeTrue();
+        expect(Schema::hasTable('list_items'))->toBeTrue();
+        expect(Schema::hasColumn('households', 'default_list_id'))->toBeTrue();
         expect(Schema::hasTable('wallet_adjustments'))->toBeTrue();
     });
 

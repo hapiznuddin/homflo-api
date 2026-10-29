@@ -1,8 +1,6 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 
 return new class extends Migration
@@ -33,11 +31,17 @@ return new class extends Migration
         ");
     }
 
-    /** Reverse the migrations. */
+    /**
+     * Reverse the migrations.
+     *
+     * This migration only backfills data owned by the previous migration.
+     * Dropping `default_list_id` here would duplicate that migration's
+     * down() and, on SQLite, fail while the foreign key still references
+     * the column. The column lifecycle stays in
+     * 2026_10_28_000003_add_default_list_id_to_households_table.
+     */
     public function down(): void
     {
-        Schema::table('households', function (Blueprint $table) {
-            $table->dropColumn('default_list_id');
-        });
+        // No schema change to reverse.
     }
 };
