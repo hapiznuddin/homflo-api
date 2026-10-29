@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+>
+    <!--
+        Explicit PostgreSQL test configuration.
+
+        The default phpunit.xml intentionally forces SQLite in-memory so the
+        regular suite has no external database dependency. Use this file only
+        when PostgreSQL behaviour must be verified:
+
+            vendor/bin/pest -c phpunit.pgsql.xml
+
+        Connection credentials are NOT stored here. They are read from the
+        developer's environment (DB_USERNAME / DB_PASSWORD) or the local .env
+        file, which is not committed. DB_CONNECTION, DB_DATABASE, and DB_URL
+        are pinned so a test run can never silently fall back to SQLite or
+        target a non-test database.
+
+        Run one PostgreSQL suite process at a time against homflo_test;
+        concurrent runs would race while RefreshDatabase migrates the shared
+        test database.
+    -->
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <env name="APP_ENV" value="testing" force="true"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file" force="true"/>
+        <env name="BCRYPT_ROUNDS" value="4" force="true"/>
+        <env name="BROADCAST_CONNECTION" value="null" force="true"/>
+        <env name="CACHE_STORE" value="array" force="true"/>
+        <env name="DB_CONNECTION" value="pgsql" force="true"/>
+        <env name="DB_HOST" value="127.0.0.1"/>
+        <env name="DB_PORT" value="5432"/>
+        <env name="DB_DATABASE" value="homflo_test" force="true"/>
+        <env name="DB_TEST_DATABASE" value="homflo_test"/>
+        <env name="DB_URL" value="" force="true"/>
+        <env name="MAIL_MAILER" value="array" force="true"/>
+        <env name="QUEUE_CONNECTION" value="sync" force="true"/>
+        <env name="SESSION_DRIVER" value="array" force="true"/>
+        <env name="PULSE_ENABLED" value="false" force="true"/>
+        <env name="TELESCOPE_ENABLED" value="false" force="true"/>
+        <env name="NIGHTWATCH_ENABLED" value="false" force="true"/>
+        <server name="APP_ENV" value="testing"/>
+        <server name="DB_CONNECTION" value="pgsql"/>
+        <server name="DB_DATABASE" value="homflo_test"/>
+        <server name="DB_TEST_DATABASE" value="homflo_test"/>
+        <server name="DB_URL" value=""/>
+    </php>
+</phpunit>
