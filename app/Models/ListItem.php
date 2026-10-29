@@ -2,15 +2,20 @@
 
 namespace App\Models;
 
+use Database\Factories\ListItemFactory;
+use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ListItem extends Model
 {
-    use \Illuminate\Database\Eloquent\ULid;
+    /** @use HasFactory<ListItemFactory> */
+    use HasFactory, HasUlids;
 
     protected $table = 'list_items';
+
     public $timestamps = true;
 
     protected $fillable = [
@@ -50,13 +55,7 @@ class ListItem extends Model
         return $this->belongsTo(User::class, 'completed_by');
     }
 
-    /** Get the household that owns the list. */
-    public function household(): BelongsTo
-    {
-        return $this->list()->household();
-    }
-
-    /** Item status: active or completed. */
+    /** Item status: active or completed, derived from completed_at. */
     public function status(): string
     {
         return $this->completed_at === null ? 'active' : 'completed';
@@ -74,17 +73,23 @@ class ListItem extends Model
         return $this->completed_at !== null;
     }
 
-    /** Check if item has expense. */
+    /** Check if item already has its single Expense. */
     public function hasExpense(): bool
     {
-        return $this->expenses()->exists();
+        return $this->expense()->exists();
     }
 
-    /** Get the expense for this item. */
-    public function expense()
+    /**
+     * The single Expense transaction linked to this item.
+     *
+     * The database enforces at most one row per ListItem through the
+     * partial unique index, so callers use ->first() rather than a
+     * collection semantics.
+     */
+    public function expense(): HasMany
     {
         return $this->hasMany(Transaction::class, 'source_id')
-            ->where('source_type', ListItem::class);
+            ->where('source_type', self::class);
     }
 
     /** Scope to active items only. */

@@ -6,14 +6,23 @@ use Illuminate\Foundation\Http\FormRequest;
 
 class StoreListItemRequest extends FormRequest
 {
-    /** Get the validation rules that apply to the request. */
+    /**
+     * @return array<string, mixed>
+     */
     public function rules(): array
     {
         return [
-            'title' => 'required|string|max:255',
-            'quantity' => 'nullable|decimal|between:0,999999999.99',
-            'unit' => 'nullable|string|max:20',
-            'estimated_price' => 'nullable|decimal|between:0,9999999999999.99',
+            'title' => ['required', 'string', 'max:255'],
+            'quantity' => ['sometimes', 'nullable', 'numeric', 'gt:0', 'max:99999999.99'],
+            'unit' => ['sometimes', 'nullable', 'string', 'max:20'],
+            'estimated_price' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:9999999999999.99'],
+            'actual_price' => ['prohibited'],
+            'status' => ['prohibited'],
+            'completed_at' => ['prohibited'],
+            'completed_by' => ['prohibited'],
+            'created_by' => ['prohibited'],
+            'list_id' => ['prohibited'],
+            'household_id' => ['prohibited'],
         ];
     }
 

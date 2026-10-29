@@ -199,6 +199,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/lists/default', [ListController::class, 'default']);
         Route::get('/lists/{list}', [ListController::class, 'show']);
         Route::get('/lists/{list}/items', [ListItemController::class, 'index']);
+        Route::get('/lists/{list}/items/{item}', [ListItemController::class, 'show']);
 
         // List writes behind verified gate
         Route::middleware('verified')->group(function () {

@@ -2,15 +2,20 @@
 
 namespace App\Models;
 
+use Database\Factories\HouseholdListFactory;
+use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class HouseholdList extends Model
 {
-    use \Illuminate\Database\Eloquent\ULid;
+    /** @use HasFactory<HouseholdListFactory> */
+    use HasFactory, HasUlids;
 
     protected $table = 'lists';
+
     public $timestamps = true;
 
     protected $fillable = [
@@ -23,6 +28,7 @@ class HouseholdList extends Model
 
     protected $casts = [
         'type' => 'string',
+        'archived_at' => 'datetime',
     ];
 
     /** Get the household that owns the list. */
@@ -61,10 +67,17 @@ class HouseholdList extends Model
         return $this->archived_at !== null;
     }
 
-    /** Check if list is the default for the household. */
+    /**
+     * Check if list is the default for the household.
+     *
+     * The pointer lives on households.default_list_id; it is never a
+     * column on lists. Both values are ULID strings, so compare them
+     * directly (casting to bool would always be false).
+     */
     public function isDefaultForHousehold(): bool
     {
-        return (bool) $this->household->default_list_id === $this->id;
+        return $this->household !== null
+            && $this->household->default_list_id === $this->id;
     }
 
     /** Scope to active lists only. */

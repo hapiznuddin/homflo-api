@@ -2,39 +2,68 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Models\HouseholdList;
-use App\Models\ListItem;
-use App\Models\User;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\CompleteListItemRequest;
+use App\Http\Requests\Api\StoreListExpenseRequest;
 use App\Http\Requests\Api\StoreListItemRequest;
 use App\Http\Requests\Api\UpdateListItemRequest;
+use App\Models\Category;
+use App\Models\Household;
+use App\Models\HouseholdList;
+use App\Models\HouseholdMember;
+use App\Models\ListItem;
+use App\Models\Transaction;
+use App\Models\User;
+use App\Models\Wallet;
+use App\Repositories\Contracts\WalletRepositoryInterface;
+use App\Services\Finance\LedgerMath;
+use App\Services\Household\HouseholdService;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ListItemController extends Controller
 {
+    public function __construct(
+        private readonly HouseholdService $householdService,
+        private readonly WalletRepositoryInterface $wallets,
+    ) {}
+
     public function index(Request $request, HouseholdList $list): JsonResponse
     {
-        // Cross-household access masked as 404
-        $household = $list->household;
+        $household = $this->resolveHousehold($request->user());
 
         if ($household === null || $list->household_id !== $household->id) {
             return $this->listNotFound();
         }
 
-        $items = $list->items();
+        $request->validate([
+            'status' => ['sometimes', 'string', 'in:active,completed'],
+        ]);
 
-        // Filter by status if provided
-        if ($request->has('status')) {
-            $status = $request->query('status');
-            if ($status === 'active') {
-                $items->whereNull('completed_at');
-            } elseif ($status === 'completed') {
-                $items->whereNotNull('completed_at');
-            }
-        }
+        $status = $request->query('status');
+        $relations = ['creator', 'completer', 'expense.sourceWallet', 'expense.category'];
 
-        $items = $items->get();
+        $active = $list->items()
+            ->with($relations)
+            ->whereNull('completed_at')
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        $completed = $list->items()
+            ->with($relations)
+            ->whereNotNull('completed_at')
+            ->orderByDesc('completed_at')
+            ->orderByDesc('id')
+            ->get();
+
+        $items = match ($status) {
+            'active' => $active,
+            'completed' => $completed,
+            default => $active->concat($completed),
+        };
 
         return response()->json([
             'success' => true,
@@ -44,36 +73,30 @@ class ListItemController extends Controller
 
     public function store(StoreListItemRequest $request, HouseholdList $list): JsonResponse
     {
-        // Cross-household access masked as 404
-        $household = $list->household;
+        $household = $this->resolveHousehold($request->user());
 
         if ($household === null || $list->household_id !== $household->id) {
             return $this->listNotFound();
         }
 
-        // Item harus list aktif
         if ($list->isArchived()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ARCHIVED',
-                    'message' => 'List is archived; items cannot be added.',
-                ],
-            ], 409);
+            return $this->listArchived('List is archived; items cannot be added.');
         }
 
-        $item = new ListItem([
+        $validated = $request->validated();
+
+        $item = ListItem::create([
             'list_id' => $list->id,
-            'title' => $request->validated()['title'],
-            'quantity' => $request->validated()['quantity'],
-            'unit' => $request->validated()['unit'],
-            'estimated_price' => $request->validated()['estimated_price'],
+            'title' => $validated['title'],
+            'quantity' => $validated['quantity'] ?? null,
+            'unit' => $validated['unit'] ?? null,
+            'estimated_price' => $validated['estimated_price'] ?? null,
             'created_by' => $request->user()->id,
         ]);
 
-        $item->save();
-
         $list->touch();
+
+        $item->load(['creator', 'completer', 'expense.sourceWallet', 'expense.category']);
 
         return response()->json([
             'success' => true,
@@ -81,202 +104,307 @@ class ListItemController extends Controller
         ], 201);
     }
 
-    public function show(ListItem $item): JsonResponse
+    public function show(Request $request, HouseholdList $list, ListItem $item): JsonResponse
     {
-        // Cross-household access masked as 404
-        $household = $item->household;
+        $resolved = $this->resolveItem($request->user(), $list, $item);
 
-        if ($household === null || $item->list->household_id !== $household->id) {
+        if ($resolved === null) {
             return $this->itemNotFound();
         }
+
+        $resolved->load(['creator', 'completer', 'expense.sourceWallet', 'expense.category']);
 
         return response()->json([
             'success' => true,
-            'data' => $this->presentItem($item),
+            'data' => $this->presentItem($resolved),
         ]);
     }
 
-    public function update(UpdateListItemRequest $request, ListItem $item): JsonResponse
+    public function update(UpdateListItemRequest $request, HouseholdList $list, ListItem $item): JsonResponse
     {
-        // Cross-household access masked as 404
-        $household = $item->household;
+        $resolved = $this->resolveItem($request->user(), $list, $item);
 
-        if ($household === null || $item->list->household_id !== $household->id) {
+        if ($resolved === null) {
             return $this->itemNotFound();
         }
 
-        // Item archived → read-only
-        if ($item->list->isArchived()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ARCHIVED',
-                    'message' => 'List is archived; item updates disallowed.',
-                ],
-            ], 409);
+        if ($resolved->list->isArchived()) {
+            return $this->listArchived('List is archived; item updates disallowed.');
         }
 
-        // Completion check: bila item sudah completed dan request bukan uncomplete
-        if ($item->isCompleted() && !$request->filled('uncomplete')) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ITEM_ALREADY_COMPLETED',
-                    'message' => 'Item already completed. Use uncomplete first if needed.',
-                ],
-            ], 409);
-        }
-
-        // Actual price lock: bila sudah ada Expense, tidak boleh diubah
-        if ($item->hasExpense() && $request->filled('actual_price')) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ITEM_PRICE_LOCKED',
-                    'message' => 'Actual price locked; Expense already exists.',
-                ],
-            ], 409);
-        }
-
+        $validated = $request->validated();
         $updates = [];
 
-        if ($request->filled('title')) {
-            $updates['title'] = $request->validated()['title'];
-        }
-        if ($request->filled('quantity')) {
-            $updates['quantity'] = $request->validated()['quantity'];
-        }
-        if ($request->filled('unit')) {
-            $updates['unit'] = $request->validated()['unit'];
-        }
-        if ($request->filled('estimated_price')) {
-            $updates['estimated_price'] = $request->validated()['estimated_price'];
-        }
-        // actual_price tidak boleh diupdate lewat PATCH jika sudah ada Expense;
-        // dilarang, biarkan service Expense yang mengelolanya
+        if ($resolved->isCompleted()) {
+            $editable = ['title', 'quantity', 'unit', 'estimated_price'];
 
-        $item->update($updates);
-        $item->list->touch();
+            foreach ($editable as $field) {
+                if (array_key_exists($field, $validated)) {
+                    return $this->error(
+                        'LIST_ITEM_ALREADY_COMPLETED',
+                        'Item already completed. Use uncomplete first if needed.',
+                        409,
+                    );
+                }
+            }
+
+            if (array_key_exists('actual_price', $validated)) {
+                if ($resolved->hasExpense()) {
+                    return $this->error(
+                        'LIST_ITEM_PRICE_LOCKED',
+                        'Actual price locked; Expense already exists.',
+                        409,
+                    );
+                }
+
+                $updates['actual_price'] = $validated['actual_price'];
+            }
+        } else {
+            if (array_key_exists('actual_price', $validated)) {
+                return $this->error(
+                    'LIST_ITEM_NOT_COMPLETED',
+                    'Actual price can only be changed after completion.',
+                    422,
+                );
+            }
+
+            foreach (['title', 'quantity', 'unit', 'estimated_price'] as $field) {
+                if (array_key_exists($field, $validated)) {
+                    $updates[$field] = $validated[$field];
+                }
+            }
+        }
+
+        if ($updates !== []) {
+            $resolved->update($updates);
+            $resolved->list->touch();
+        }
+
+        $resolved->refresh()->load(['creator', 'completer', 'expense.sourceWallet', 'expense.category']);
 
         return response()->json([
             'success' => true,
-            'data' => $this->presentItem($item),
+            'data' => $this->presentItem($resolved),
         ]);
     }
 
-    public function complete(ListItem $item): JsonResponse
+    public function complete(CompleteListItemRequest $request, HouseholdList $list, ListItem $item): JsonResponse
     {
-        // Cross-household access masked as 404
-        $household = $item->household;
+        $resolved = $this->resolveItem($request->user(), $list, $item);
 
-        if ($household === null || $item->list->household_id !== $household->id) {
+        if ($resolved === null) {
             return $this->itemNotFound();
         }
 
-        // Item archived → cannot complete
-        if ($item->list->isArchived()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ARCHIVED',
-                    'message' => 'List is archived; completion disallowed.',
-                ],
-            ], 409);
+        if ($resolved->list->isArchived()) {
+            return $this->listArchived('List is archived; completion disallowed.');
         }
 
-        // Item already completed
-        if ($item->isCompleted()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ITEM_ALREADY_COMPLETED',
-                    'message' => 'Item already completed.',
-                ],
-            ], 409);
+        if ($resolved->isCompleted()) {
+            return $this->error('LIST_ITEM_ALREADY_COMPLETED', 'Item already completed.', 409);
         }
 
-        // Expense check: jika item sudah punya Expense, completion tetap bole tapi
-        // actual_price harus null atau nilai yang ada dipertahankan
-        // completion tidak membuat Expense
+        $validated = $request->validated();
+        $hasActualPrice = array_key_exists('actual_price', $validated);
 
-        return $item->completeTransaction(function () use ($item) {
-            // Server-side: set completed_at, completed_by
-            $item->completed_at = now()->utc();
-            $item->completed_by = request()->user()->id;
-            $item->list->touch();
+        if ($hasActualPrice && $resolved->hasExpense()
+            && ! $this->sameDecimal($resolved->actual_price, $validated['actual_price'])) {
+            return $this->error(
+                'LIST_ITEM_PRICE_LOCKED',
+                'Actual price locked; Expense already exists.',
+                409,
+            );
+        }
 
-            return $item->save();
+        $result = DB::transaction(function () use ($resolved, $request, $validated, $hasActualPrice): array {
+            /** @var HouseholdList $lockedList */
+            $lockedList = HouseholdList::query()
+                ->whereKey($resolved->list_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            /** @var ListItem $lockedItem */
+            $lockedItem = ListItem::query()
+                ->whereKey($resolved->id)
+                ->where('list_id', $lockedList->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedList->archived_at !== null) {
+                return ['error' => 'archived'];
+            }
+
+            if ($lockedItem->isCompleted()) {
+                return ['error' => 'already_completed'];
+            }
+
+            if ($hasActualPrice && $lockedItem->hasExpense()
+                && ! $this->sameDecimal($lockedItem->actual_price, $validated['actual_price'])) {
+                return ['error' => 'price_locked'];
+            }
+
+            $lockedItem->completed_at = now()->utc();
+            $lockedItem->completed_by = $request->user()->id;
+
+            if ($hasActualPrice) {
+                $lockedItem->actual_price = $validated['actual_price'];
+            }
+
+            $lockedItem->save();
+            $lockedList->touch();
+
+            return ['item' => $lockedItem];
         });
+
+        return match ($result['error'] ?? null) {
+            'archived' => $this->listArchived('List is archived; completion disallowed.'),
+            'already_completed' => $this->error('LIST_ITEM_ALREADY_COMPLETED', 'Item already completed.', 409),
+            'price_locked' => $this->error('LIST_ITEM_PRICE_LOCKED', 'Actual price locked; Expense already exists.', 409),
+            default => $this->presentItemResponse($result['item']),
+        };
     }
 
-    public function uncomplete(ListItem $item): JsonResponse
+    public function uncomplete(Request $request, HouseholdList $list, ListItem $item): JsonResponse
     {
-        // Hanya diizinkan jika A-18 disetujui (AMD-05)
-        // Kontrak: A-18 disetujui — uncompletion Completed → Active diizinkan.
+        $resolved = $this->resolveItem($request->user(), $list, $item);
 
-        // Cross-household access masked as 404
-        $household = $item->household;
-
-        if ($household === null || $item->list->household_id !== $household->id) {
+        if ($resolved === null) {
             return $this->itemNotFound();
         }
 
-        // Item archived → cannot uncomplete
-        if ($item->list->isArchived()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ARCHIVED',
-                    'message' => 'List is archived; uncompletion disallowed.',
-                ],
-            ], 409);
+        if ($resolved->list->isArchived()) {
+            return $this->listArchived('List is archived; uncompletion disallowed.');
         }
 
-        // Item not completed → error
-        if (!$item->isCompleted()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ITEM_NOT_COMPLETED',
-                    'message' => 'Item is not completed.',
-                ],
-            ], 409);
+        if (! $resolved->isCompleted()) {
+            return $this->error('LIST_ITEM_NOT_COMPLETED', 'Item is not completed.', 409);
         }
 
-        // Uncomplete: clear completed_at,pertahankan actual_price
-        return $item->completeTransaction(function () use ($item) {
-            $item->completed_at = null;
-            $item->completed_by = null;
-            // actual_price dipertahankan (tidak direset)
-            $item->save();
+        $result = DB::transaction(function () use ($resolved): array {
+            /** @var HouseholdList $lockedList */
+            $lockedList = HouseholdList::query()
+                ->whereKey($resolved->list_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            /** @var ListItem $lockedItem */
+            $lockedItem = ListItem::query()
+                ->whereKey($resolved->id)
+                ->where('list_id', $lockedList->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedList->archived_at !== null) {
+                return ['error' => 'archived'];
+            }
+
+            if (! $lockedItem->isCompleted()) {
+                return ['error' => 'not_completed'];
+            }
+
+            $lockedItem->completed_at = null;
+            $lockedItem->completed_by = null;
+            // actual_price is deliberately retained (A-10 / AMD-05).
+            $lockedItem->save();
+            $lockedList->touch();
+
+            return ['item' => $lockedItem];
         });
+
+        return match ($result['error'] ?? null) {
+            'archived' => $this->listArchived('List is archived; uncompletion disallowed.'),
+            'not_completed' => $this->error('LIST_ITEM_NOT_COMPLETED', 'Item is not completed.', 409),
+            default => $this->presentItemResponse($result['item']),
+        };
     }
 
-    public function expense(ListItem $item): JsonResponse
+    public function destroy(Request $request, HouseholdList $list, ListItem $item): JsonResponse
     {
-        // Cross-household access masked as 404
-        $household = $item->household;
+        $resolved = $this->resolveItem($request->user(), $list, $item);
 
-        if ($household === null || $item->list->household_id !== $household->id) {
+        if ($resolved === null) {
             return $this->itemNotFound();
         }
 
-        // Item harus completed sebelum Expense dibuat
-        if (!$item->isCompleted()) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ITEM_NOT_COMPLETED',
-                    'message' => 'Item must be completed before creating Expense.',
-                ],
-            ], 409);
+        if ($resolved->list->isArchived()) {
+            return $this->listArchived('List is archived; item deletion disallowed.');
         }
 
-        // Maksimal satu Expense per item
-        if ($item->hasExpense()) {
-            // Kembalikan transaksi yang sudah ada (idempoten-200)
-            $existing = $item->expense()->first();
+        if ($resolved->hasExpense()) {
+            return $this->error(
+                'LIST_ITEM_HAS_EXPENSE',
+                'Item has an Expense and cannot be deleted.',
+                409,
+            );
+        }
 
+        $result = DB::transaction(function () use ($resolved): array {
+            /** @var HouseholdList $lockedList */
+            $lockedList = HouseholdList::query()
+                ->whereKey($resolved->list_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            /** @var ListItem $lockedItem */
+            $lockedItem = ListItem::query()
+                ->whereKey($resolved->id)
+                ->where('list_id', $lockedList->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedList->archived_at !== null) {
+                return ['error' => 'archived'];
+            }
+
+            if ($lockedItem->hasExpense()) {
+                return ['error' => 'has_expense'];
+            }
+
+            $id = $lockedItem->id;
+            $lockedItem->delete();
+            $lockedList->touch();
+
+            return ['id' => $id];
+        });
+
+        return match ($result['error'] ?? null) {
+            'archived' => $this->listArchived('List is archived; item deletion disallowed.'),
+            'has_expense' => $this->error('LIST_ITEM_HAS_EXPENSE', 'Item has an Expense and cannot be deleted.', 409),
+            default => response()->json([
+                'success' => true,
+                'data' => ['id' => $result['id']],
+            ]),
+        };
+    }
+
+    public function expense(StoreListExpenseRequest $request, HouseholdList $list, ListItem $item): JsonResponse
+    {
+        $household = $this->resolveHousehold($request->user());
+
+        if ($household === null || $list->household_id !== $household->id || $item->list_id !== $list->id) {
+            return $this->itemNotFound();
+        }
+
+        if ($list->isArchived()) {
+            return $this->listArchived('List is archived; Expense creation disallowed.');
+        }
+
+        if (! $this->isOwner($request->user(), $household)) {
+            return $this->error('FORBIDDEN', 'Only household owners can create Expenses.', 403);
+        }
+
+        if (! $item->isCompleted()) {
+            return $this->error(
+                'LIST_ITEM_NOT_COMPLETED',
+                'Item must be completed before creating Expense.',
+                409,
+            );
+        }
+
+        // Expense is idempotent-200: a retry returns the existing row.
+        $existing = $item->expense()->with(['sourceWallet', 'category'])->first();
+
+        if ($existing !== null) {
             return response()->json([
                 'success' => true,
                 'data' => $this->presentExpense($existing),
@@ -284,70 +412,114 @@ class ListItemController extends Controller
             ]);
         }
 
-        // Validasi: actual_price harus ada dan > 0
-        $actualPrice = $item->actual_price;
+        $validated = $request->validated();
+        $actualPrice = array_key_exists('actual_price', $validated)
+            ? $validated['actual_price']
+            : $item->actual_price;
 
-        if ($actualPrice === null || $actualPrice <= 0) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'LIST_ITEM_ACTUAL_PRICE_REQUIRED',
-                    'message' => 'Actual price is required for Expense and must be > 0.',
-                ],
-            ], 422);
+        if ($actualPrice === null || (float) $actualPrice <= 0) {
+            return $this->error(
+                'LIST_ITEM_ACTUAL_PRICE_REQUIRED',
+                'Actual price is required for Expense and must be > 0.',
+                422,
+            );
         }
 
-        // Resolve wallet dan kategori
-        $wallet = $this->resolveWallet($household);
+        $wallet = $this->resolveWallet($household, $validated['wallet_id'] ?? null);
 
         if ($wallet === null) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'WALLET_NOT_FOUND',
-                    'message' => 'No active wallet found for household.',
-                ],
-            ], 404);
+            return $this->error('WALLET_NOT_FOUND', 'No active wallet found for household.', 404);
         }
 
-        // Cek saldo non-negatif
-        $saldoCents = $wallet->balance_cents; // asumsi Wallet model punya field ini
-        if ($saldoCents < ($actualPrice * 100)) {
-            return response()->json([
-                'success' => false,
-                'error' => [
-                    'code' => 'INSUFFICIENT_WALLET_BALANCE',
-                    'message' => 'Insufficient wallet balance for this expense.',
-                ],
-            ], 422);
+        $category = $this->resolveCategory($household, $validated['category_id'] ?? null);
+
+        if ($category === false) {
+            return $this->error('CATEGORY_TYPE_MISMATCH', 'Category must be an expense category.', 422);
         }
 
-        // Buat transaksi expense dalam satu DB::transaction
-        $expense = \App\Transaction::transaction(function () use ($item, $wallet, $actualPrice) {
-            $expense = new \App\Transaction([
-                'type' => 'expense',
-                'amount' => $actualPrice, // decimal string 2 digit
-                'occurred_on' => now()->localeFormat('Y-m-d'), // Asia/Jakarta business today bisa difallback
-                'wallet_id' => $wallet->id,
-                'source_type' => ListItem::class,
-                'source_id' => $item->id,
-                'household_id' => $household->id,
-                // description server-side: snapshot title
-                'description' => $item->title,
-                // source morph sudah di-set di atas
-            ]);
+        if ($category === null && array_key_exists('category_id', $validated) && $validated['category_id'] !== null) {
+            return $this->error('CATEGORY_NOT_FOUND', 'Category not found.', 404);
+        }
 
-            $expense->save();
+        try {
+            $expense = DB::transaction(function () use ($list, $item, $household, $wallet, $category, $validated, $actualPrice): Transaction {
+                /** @var HouseholdList $lockedList */
+                $lockedList = HouseholdList::query()
+                    ->whereKey($list->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            // Update actual_price pada item bila payload mengirim (tapi di sini kita pakai existing)
-            // di sini actual_price sudah pasti > 0 karena sudah divalidasi di atas
-            $item->update(['actual_price' => $actualPrice]);
+                /** @var ListItem $lockedItem */
+                $lockedItem = ListItem::query()
+                    ->whereKey($item->id)
+                    ->where('list_id', $lockedList->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            // Update wallet saldo
-            // $wallet->decrement('balance_cents', $actualPrice * 100);
+                /** @var Wallet $lockedWallet */
+                $lockedWallet = Wallet::query()
+                    ->whereKey($wallet->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            return $expense;
-        });
+                $existing = $lockedItem->expense()->first();
+
+                if ($existing !== null) {
+                    return $existing;
+                }
+
+                $balance = $this->wallets->balanceFor($lockedWallet);
+                $amount = number_format((float) $actualPrice, 2, '.', '');
+
+                if (LedgerMath::compare($balance, $amount) < 0) {
+                    throw new \RuntimeException('INSUFFICIENT_FUNDS');
+                }
+
+                $expense = Transaction::create([
+                    'household_id' => $household->id,
+                    'category_id' => $category?->id,
+                    'wallet_id' => $lockedWallet->id,
+                    'type' => Transaction::TYPE_EXPENSE,
+                    'amount' => $amount,
+                    'occurred_on' => $validated['occurred_on'] ?? now()->toDateString(),
+                    'description' => $lockedItem->title,
+                    'source_type' => ListItem::class,
+                    'source_id' => $lockedItem->id,
+                ]);
+
+                if (array_key_exists('actual_price', $validated)) {
+                    $lockedItem->actual_price = $validated['actual_price'];
+                    $lockedItem->save();
+                }
+
+                $lockedList->touch();
+
+                return $expense;
+            });
+        } catch (\RuntimeException $exception) {
+            if ($exception->getMessage() === 'INSUFFICIENT_FUNDS') {
+                return $this->error('INSUFFICIENT_FUNDS', 'Insufficient wallet balance for this expense.', 422);
+            }
+
+            throw $exception;
+        } catch (QueryException $exception) {
+            // The partial unique index is the final guard against two
+            // concurrent writers. The failed transaction is rolled back
+            // by the time we get here, so a fresh read is safe.
+            $existing = $item->expense()->with(['sourceWallet', 'category'])->first();
+
+            if ($existing !== null) {
+                return response()->json([
+                    'success' => true,
+                    'data' => $this->presentExpense($existing),
+                    'info' => 'Expense already exists for this item. Klik generate untuk detail.',
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        $expense->load(['sourceWallet', 'category']);
 
         return response()->json([
             'success' => true,
@@ -355,22 +527,181 @@ class ListItemController extends Controller
         ], 201);
     }
 
-    private function resolveWallet(\App\Models\Household $household): ?\App\Models\Wallet
+    private function resolveHousehold(?User $user): ?Household
     {
-        // Cari wallet aktif milik household
-        return \App\Models\Wallet::where('household_id', $household->id)
+        if ($user === null) {
+            return null;
+        }
+
+        $context = $this->householdService->resolveUserHouseholdContext($user);
+
+        if ($context['household'] === null) {
+            return null;
+        }
+
+        return Household::query()->find($context['household']['id']);
+    }
+
+    /**
+     * Resolve a nested item against the authenticated household and the
+     * list in the URL. A mismatched list/item pair is a 404, never 403.
+     */
+    private function resolveItem(?User $user, HouseholdList $list, ListItem $item): ?ListItem
+    {
+        $household = $this->resolveHousehold($user);
+
+        if ($household === null || $list->household_id !== $household->id) {
+            return null;
+        }
+
+        if ($item->list_id !== $list->id) {
+            return null;
+        }
+
+        return $item;
+    }
+
+    private function isOwner(User $user, Household $household): bool
+    {
+        return HouseholdMember::query()
+            ->where('household_id', $household->id)
+            ->where('user_id', $user->id)
+            ->where('role', 'owner')
+            ->exists();
+    }
+
+    private function resolveWallet(Household $household, ?string $walletId): ?Wallet
+    {
+        if ($walletId !== null) {
+            return Wallet::query()
+                ->where('household_id', $household->id)
+                ->whereKey($walletId)
+                ->where('is_active', true)
+                ->first();
+        }
+
+        return Wallet::query()
+            ->where('household_id', $household->id)
             ->where('is_active', true)
+            ->orderBy('created_at')
+            ->orderBy('id')
             ->first();
     }
 
-    private function presentExpense(\App\Transaction $transaction): array
+    /**
+     * @return Category|false|null false means the category exists but has
+     *                             the wrong type; null means not found.
+     */
+    private function resolveCategory(Household $household, ?string $categoryId): Category|false|null
+    {
+        if ($categoryId === null) {
+            return null;
+        }
+
+        $category = Category::query()
+            ->where('household_id', $household->id)
+            ->whereKey($categoryId)
+            ->first();
+
+        if ($category === null) {
+            return null;
+        }
+
+        return $category->type === Category::TYPE_EXPENSE ? $category : false;
+    }
+
+    private function sameDecimal(mixed $left, mixed $right): bool
+    {
+        if ($left === null || $right === null) {
+            return $left === $right;
+        }
+
+        return number_format((float) $left, 2, '.', '')
+            === number_format((float) $right, 2, '.', '');
+    }
+
+    private function presentItemResponse(ListItem $item): JsonResponse
+    {
+        $item->refresh()->load(['creator', 'completer', 'expense.sourceWallet', 'expense.category']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->presentItem($item),
+        ]);
+    }
+
+    private function presentItem(ListItem $item): array
+    {
+        $expense = $item->relationLoaded('expense')
+            ? $item->expense->first()
+            : $item->expense()->with(['sourceWallet', 'category'])->first();
+
+        return [
+            'id' => $item->id,
+            'list_id' => $item->list_id,
+            'title' => $item->title,
+            'quantity' => $item->quantity,
+            'unit' => $item->unit,
+            'estimated_price' => $item->estimated_price,
+            'actual_price' => $item->actual_price,
+            'status' => $item->status(),
+            // Kept as an additive compatibility alias for older clients
+            // and the legacy PostgreSQL suite; contract uses `status`.
+            'is_completed' => $item->isCompleted(),
+            'completed_at' => $item->completed_at,
+            'completed_by' => $this->presentUser($item->completer),
+            'created_by' => $this->presentUser($item->creator),
+            'expense' => $expense !== null ? $this->presentItemExpense($expense) : null,
+            'created_at' => $item->created_at,
+            'updated_at' => $item->updated_at,
+        ];
+    }
+
+    /**
+     * @return array{id: string, name: string}|null
+     */
+    private function presentUser(?User $user): ?array
+    {
+        if ($user === null) {
+            return null;
+        }
+
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+        ];
+    }
+
+    private function presentItemExpense(Transaction $transaction): array
+    {
+        return [
+            'id' => $transaction->id,
+            'amount' => $transaction->amount,
+            'occurred_on' => $transaction->occurred_on?->format('Y-m-d'),
+            'wallet' => $transaction->sourceWallet ? [
+                'id' => $transaction->sourceWallet->id,
+                'name' => $transaction->sourceWallet->name,
+                'type' => $transaction->sourceWallet->type,
+                'is_active' => $transaction->sourceWallet->is_active,
+            ] : null,
+            'category' => $transaction->category ? [
+                'id' => $transaction->category->id,
+                'name' => $transaction->category->name,
+                'icon' => $transaction->category->icon,
+            ] : null,
+            'created_at' => $transaction->created_at,
+        ];
+    }
+
+    private function presentExpense(Transaction $transaction): array
     {
         return [
             'id' => $transaction->id,
             'type' => $transaction->type,
             'amount' => $transaction->amount,
-            'occurred_on' => $transaction->occurred_on,
+            'occurred_on' => $transaction->occurred_on?->format('Y-m-d'),
             'wallet_id' => $transaction->wallet_id,
+            'category_id' => $transaction->category_id,
             'source_type' => $transaction->source_type,
             'source_id' => $transaction->source_id,
             'description' => $transaction->description,
@@ -378,14 +709,34 @@ class ListItemController extends Controller
         ];
     }
 
-    private function itemNotFound(): JsonResponse
+    private function error(string $code, string $message, int $status): JsonResponse
     {
         return response()->json([
             'success' => false,
             'error' => [
-                'code' => 'LIST_ITEM_NOT_FOUND',
-                'message' => 'List item not found.',
+                'code' => $code,
+                'message' => $message,
             ],
-        ], 404);
+        ], $status);
+    }
+
+    private function householdNotFound(): JsonResponse
+    {
+        return $this->error('HOUSEHOLD_NOT_FOUND', 'Household not found.', 404);
+    }
+
+    private function listNotFound(): JsonResponse
+    {
+        return $this->error('LIST_NOT_FOUND', 'List not found.', 404);
+    }
+
+    private function itemNotFound(): JsonResponse
+    {
+        return $this->error('LIST_ITEM_NOT_FOUND', 'List item not found.', 404);
+    }
+
+    private function listArchived(string $message): JsonResponse
+    {
+        return $this->error('LIST_ARCHIVED', $message, 409);
     }
 }
