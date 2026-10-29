@@ -7,6 +7,7 @@ use App\Exceptions\CategoryNotFoundException;
 use App\Exceptions\CategoryTypeMismatchException;
 use App\Exceptions\InsufficientFundsException;
 use App\Exceptions\InvalidTransferException;
+use App\Exceptions\ListExpenseLockedException;
 use App\Exceptions\WalletNotFoundException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\IndexTransactionRequest;
@@ -130,6 +131,8 @@ class TransactionController extends Controller
             $updated = $this->transactionService->change($resolved->household, $resolved, $request->validated());
         } catch (BillPaymentImmutableException $exception) {
             return $this->unprocessable('BILL_PAYMENT_LOCKED', $exception->getMessage());
+        } catch (ListExpenseLockedException $exception) {
+            return $this->unprocessable('LIST_EXPENSE_LOCKED', $exception->getMessage());
         } catch (CategoryNotFoundException $exception) {
             return $this->categoryNotFound($exception);
         } catch (CategoryTypeMismatchException|InvalidTransferException $exception) {
@@ -162,6 +165,8 @@ class TransactionController extends Controller
             $this->transactionService->remove($resolved->household, $resolved);
         } catch (BillPaymentImmutableException $exception) {
             return $this->unprocessable('BILL_PAYMENT_LOCKED', $exception->getMessage());
+        } catch (ListExpenseLockedException $exception) {
+            return $this->unprocessable('LIST_EXPENSE_LOCKED', $exception->getMessage());
         } catch (InsufficientFundsException $exception) {
             return $this->unprocessable('INSUFFICIENT_FUNDS', $exception->getMessage());
         }

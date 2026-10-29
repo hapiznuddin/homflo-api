@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Category;
 use App\Models\Household;
 use App\Models\HouseholdList;
 use App\Models\HouseholdMember;
@@ -7,6 +8,7 @@ use App\Models\ListItem;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\Wallet;
+use App\Services\Finance\PeriodBounds;
 
 /**
  * SQLite runtime coverage for the Lists API fixes in Phase 16.6.9.
@@ -214,7 +216,6 @@ describe('complete and uncomplete', function () {
             ])
             ->assertOk()
             ->assertJsonPath('data.status', 'completed')
-            ->assertJsonPath('data.is_completed', true)
             ->assertJsonPath('data.actual_price', '12500.00')
             ->assertJsonPath('data.completed_by.id', $owner->id)
             ->assertJsonPath('data.expense', null);
@@ -237,7 +238,6 @@ describe('complete and uncomplete', function () {
             ->postJson("/api/lists/{$list->id}/items/{$item->id}/uncomplete")
             ->assertOk()
             ->assertJsonPath('data.status', 'active')
-            ->assertJsonPath('data.is_completed', false)
             ->assertJsonPath('data.completed_at', null)
             ->assertJsonPath('data.completed_by', null)
             ->assertJsonPath('data.actual_price', '150.00');
@@ -367,35 +367,100 @@ describe('complete and uncomplete', function () {
     });
 });
 
-describe('item reads, deletes, and nested isolation', function () {
-    test('GET nested item returns the contract presenter', function () {
+describe('GET /api/lists/{list}/items response shape', function () {
+    test('an empty list returns the grouped contract shape', function () {
         $owner = User::factory()->create();
         $household = listsHousehold($owner);
         $list = listsList($household);
-        $item = listsItem($list, ['title' => 'Beras']);
 
         $this->actingAs($owner)
-            ->getJson("/api/lists/{$list->id}/items/{$item->id}")
+            ->getJson("/api/lists/{$list->id}/items")
             ->assertOk()
-            ->assertJsonPath('data.id', $item->id)
-            ->assertJsonPath('data.title', 'Beras')
-            ->assertJsonPath('data.status', 'active')
-            ->assertJsonPath('data.expense', null);
+            ->assertJsonPath('data.list_id', $list->id)
+            ->assertJsonPath('data.counts.active', 0)
+            ->assertJsonPath('data.counts.completed', 0)
+            ->assertJsonCount(0, 'data.active')
+            ->assertJsonCount(0, 'data.completed');
     });
 
-    test('an item from another list in the same household is masked as not found', function () {
+    test('items are grouped with independent contract ordering and presenter shape', function () {
         $owner = User::factory()->create();
         $household = listsHousehold($owner);
-        $first = listsList($household, ['name' => 'Pertama']);
-        $second = listsList($household, ['name' => 'Kedua']);
-        $foreignItem = listsItem($second);
+        $list = listsList($household);
+
+        $activeOld = listsItem($list, ['title' => 'Aktif Lama']);
+        $activeOld->forceFill(['created_at' => now()->subMinutes(5)])->save();
+
+        $activeNew = listsItem($list, ['title' => 'Aktif Baru']);
+        $activeNew->forceFill(['created_at' => now()->subMinute()])->save();
+
+        $completedOld = listsItem($list, [
+            'title' => 'Selesai Lama',
+            'completed_at' => now()->subMinutes(10),
+        ]);
+        $completedNew = listsItem($list, [
+            'title' => 'Selesai Baru',
+            'completed_at' => now()->subMinute(),
+        ]);
 
         $this->actingAs($owner)
-            ->getJson("/api/lists/{$first->id}/items/{$foreignItem->id}")
-            ->assertStatus(404)
-            ->assertJsonPath('error.code', 'LIST_ITEM_NOT_FOUND');
+            ->getJson("/api/lists/{$list->id}/items")
+            ->assertOk()
+            ->assertJsonPath('data.list_id', $list->id)
+            ->assertJsonPath('data.counts.active', 2)
+            ->assertJsonPath('data.counts.completed', 2)
+            ->assertJsonPath('data.active.0.title', 'Aktif Lama')
+            ->assertJsonPath('data.active.1.title', 'Aktif Baru')
+            ->assertJsonPath('data.active.0.status', 'active')
+            ->assertJsonPath('data.completed.0.title', 'Selesai Baru')
+            ->assertJsonPath('data.completed.1.title', 'Selesai Lama')
+            ->assertJsonPath('data.completed.0.status', 'completed')
+            ->assertJsonPath('data.active.0.expense', null)
+            ->assertJsonStructure([
+                'data' => [
+                    'list_id',
+                    'counts' => ['active', 'completed'],
+                    'active' => [[
+                        'id',
+                        'list_id',
+                        'title',
+                        'quantity',
+                        'unit',
+                        'estimated_price',
+                        'actual_price',
+                        'status',
+                        'completed_at',
+                        'completed_by',
+                        'created_by',
+                        'expense',
+                        'created_at',
+                        'updated_at',
+                    ]],
+                    'completed',
+                ],
+            ])
+            ->assertJsonMissingPath('data.active.0.is_completed');
+
+        expect($completedOld->id)->toBeString();
+        expect($completedNew->id)->toBeString();
     });
 
+    test('the non-MVP nested item route is no longer registered', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $list = listsList($household);
+        $item = listsItem($list);
+
+        // PATCH/DELETE own /items/{item}; a GET is not routed (405), which
+        // proves the read endpoint from §10.8 was removed rather than
+        // shadowed by a new controller action.
+        $this->actingAs($owner)
+            ->getJson("/api/lists/{$list->id}/items/{$item->id}")
+            ->assertStatus(405);
+    });
+});
+
+describe('item deletion', function () {
     test('deleting an item without Expense hard-deletes it', function () {
         $owner = User::factory()->create();
         $household = listsHousehold($owner);
@@ -489,8 +554,49 @@ describe('list archive and restore lifecycle', function () {
     });
 });
 
-describe('Expense endpoint duplicate prevention and authorization', function () {
-    test('owner creates one Expense and retries return the same row', function () {
+describe('Expense endpoint contract', function () {
+    test('created response follows the contract envelope and derives every field', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $category = Category::factory()->create([
+            'household_id' => $household->id,
+            'type' => Category::TYPE_EXPENSE,
+        ]);
+        $list = listsList($household);
+        $item = listsItem($list, [
+            'title' => 'Sabun Cuci',
+            'completed_at' => now(),
+            'actual_price' => '12500.00',
+        ]);
+
+        $response = $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+                'category_id' => $category->id,
+            ])
+            ->assertStatus(201)
+            ->assertJsonPath('data.created', true)
+            ->assertJsonPath('data.expense.type', Transaction::TYPE_EXPENSE)
+            ->assertJsonPath('data.expense.amount', '12500.00')
+            ->assertJsonPath('data.expense.description', 'Sabun Cuci')
+            ->assertJsonPath('data.expense.wallet_id', $wallet->id)
+            ->assertJsonPath('data.expense.category.id', $category->id)
+            ->assertJsonPath('data.expense.occurred_on', PeriodBounds::businessToday())
+            ->assertJsonPath('data.item.id', $item->id);
+
+        $expenseId = $response->json('data.expense.id');
+        $stored = Transaction::find($expenseId);
+
+        expect($stored)->not->toBeNull();
+        expect($stored->source_type)->toBe(ListItem::class);
+        expect($stored->source_id)->toBe($item->id);
+        expect($response->json('data.item.expense.id'))->toBe($expenseId);
+        expect($response->json('data.item.expense.amount'))->toBe('12500.00');
+        expect(Transaction::count())->toBe(1);
+    });
+
+    test('a retry returns created=false and the same Expense', function () {
         $owner = User::factory()->create();
         $household = listsHousehold($owner);
         $wallet = listsWallet($household);
@@ -500,20 +606,184 @@ describe('Expense endpoint duplicate prevention and authorization', function () 
         $first = $this->actingAs($owner)
             ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
                 'wallet_id' => $wallet->id,
-                'actual_price' => '100.00',
             ])
             ->assertStatus(201)
-            ->assertJsonPath('data.amount', '100.00');
+            ->assertJsonPath('data.created', true);
 
         $this->actingAs($owner)
             ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
                 'wallet_id' => $wallet->id,
-                'actual_price' => '100.00',
             ])
             ->assertOk()
-            ->assertJsonPath('data.id', $first->json('data.id'));
+            ->assertJsonPath('data.created', false)
+            ->assertJsonPath('data.expense.id', $first->json('data.expense.id'))
+            ->assertJsonPath('data.item.expense.id', $first->json('data.expense.id'));
 
         expect(Transaction::count())->toBe(1);
+    });
+
+    test('amount falls back to the stored actual_price when the payload omits it', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '250.50']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+            ])
+            ->assertStatus(201)
+            ->assertJsonPath('data.expense.amount', '250.50')
+            ->assertJsonPath('data.item.actual_price', '250.50');
+    });
+
+    test('an actual_price override is applied atomically to both item and ledger', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '100.00']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+                'actual_price' => '175.25',
+            ])
+            ->assertStatus(201)
+            ->assertJsonPath('data.expense.amount', '175.25')
+            ->assertJsonPath('data.item.actual_price', '175.25');
+
+        expect($item->refresh()->actual_price)->toBe('175.25');
+    });
+
+    test('a null or non-positive final price returns 422 without writing', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => null]);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'LIST_ITEM_ACTUAL_PRICE_REQUIRED');
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+                'actual_price' => '0',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'LIST_ITEM_ACTUAL_PRICE_REQUIRED');
+
+        expect(Transaction::count())->toBe(0);
+        expect($item->refresh()->actual_price)->toBeNull();
+    });
+
+    test('wallet_id is required and must be an active same-household wallet', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $inactive = Wallet::factory()->inactive()->create(['household_id' => $household->id]);
+        $foreignHousehold = listsHousehold(User::factory()->create(), 'owner', 'Rumah Lain');
+        $foreignWallet = listsWallet($foreignHousehold);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '100.00']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('wallet_id');
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $inactive->id,
+            ])
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'WALLET_NOT_FOUND');
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $foreignWallet->id,
+            ])
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'WALLET_NOT_FOUND');
+
+        expect($wallet->id)->toBeString();
+        expect(Transaction::count())->toBe(0);
+    });
+
+    test('category must be an expense category in the same household', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $incomeCategory = Category::factory()->create([
+            'household_id' => $household->id,
+            'type' => Category::TYPE_INCOME,
+        ]);
+        $foreignCategory = Category::factory()->create([
+            'household_id' => listsHousehold(User::factory()->create(), 'owner', 'Rumah Lain')->id,
+            'type' => Category::TYPE_EXPENSE,
+        ]);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '100.00']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+                'category_id' => $incomeCategory->id,
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'CATEGORY_TYPE_MISMATCH');
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+                'category_id' => $foreignCategory->id,
+            ])
+            ->assertStatus(404)
+            ->assertJsonPath('error.code', 'CATEGORY_NOT_FOUND');
+
+        expect(Transaction::count())->toBe(0);
+    });
+
+    test('insufficient funds rolls back every write', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household, '50.00');
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '100.00']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+                'actual_price' => '150.00',
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'INSUFFICIENT_FUNDS');
+
+        expect(Transaction::count())->toBe(0);
+        expect($item->refresh()->actual_price)->toBe('100.00');
+    });
+
+    test('an item must be completed before Expense creation', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $list = listsList($household);
+        $item = listsItem($list, ['actual_price' => '100.00']);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+            ])
+            ->assertStatus(409)
+            ->assertJsonPath('error.code', 'LIST_ITEM_NOT_COMPLETED');
+
+        expect(Transaction::count())->toBe(0);
     });
 
     test('same-household member cannot create Expense', function () {
@@ -554,5 +824,69 @@ describe('Expense endpoint duplicate prevention and authorization', function () 
             ->assertJsonPath('error.code', 'LIST_ARCHIVED');
 
         expect(Transaction::count())->toBe(0);
+    });
+
+    test('uncomplete keeps the Expense and re-completion never duplicates it', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '100.00']);
+
+        $expenseId = $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+            ])
+            ->assertStatus(201)
+            ->json('data.expense.id');
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/uncomplete")
+            ->assertOk()
+            ->assertJsonPath('data.actual_price', '100.00')
+            ->assertJsonPath('data.expense.id', $expenseId);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/complete")
+            ->assertOk()
+            ->assertJsonPath('data.expense.id', $expenseId);
+
+        $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.created', false)
+            ->assertJsonPath('data.expense.id', $expenseId);
+
+        expect(Transaction::count())->toBe(1);
+    });
+
+    test('list item Expenses are locked from generic Money edit and delete', function () {
+        $owner = User::factory()->create();
+        $household = listsHousehold($owner);
+        $wallet = listsWallet($household);
+        $list = listsList($household);
+        $item = listsItem($list, ['completed_at' => now(), 'actual_price' => '100.00']);
+
+        $expenseId = $this->actingAs($owner)
+            ->postJson("/api/lists/{$list->id}/items/{$item->id}/expense", [
+                'wallet_id' => $wallet->id,
+            ])
+            ->assertStatus(201)
+            ->json('data.expense.id');
+
+        $this->actingAs($owner)
+            ->patchJson("/api/transactions/{$expenseId}", ['amount' => '50.00'])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'LIST_EXPENSE_LOCKED');
+
+        $this->actingAs($owner)
+            ->deleteJson("/api/transactions/{$expenseId}")
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'LIST_EXPENSE_LOCKED');
+
+        expect(Transaction::find($expenseId))->not->toBeNull();
+        expect($item->refresh()->actual_price)->toBe('100.00');
     });
 });

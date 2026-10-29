@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Models\Wallet;
 use App\Repositories\Contracts\WalletRepositoryInterface;
 use App\Services\Finance\LedgerMath;
+use App\Services\Finance\PeriodBounds;
 use App\Services\Household\HouseholdService;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +26,8 @@ use Illuminate\Support\Facades\DB;
 
 class ListItemController extends Controller
 {
+    use PresentsTransactions;
+
     public function __construct(
         private readonly HouseholdService $householdService,
         private readonly WalletRepositoryInterface $wallets,
@@ -38,13 +41,10 @@ class ListItemController extends Controller
             return $this->listNotFound();
         }
 
-        $request->validate([
-            'status' => ['sometimes', 'string', 'in:active,completed'],
-        ]);
-
-        $status = $request->query('status');
         $relations = ['creator', 'completer', 'expense.sourceWallet', 'expense.category'];
 
+        // Contract §10.6: two groups with independent server-side ordering.
+        // The response is an object, never a flat array.
         $active = $list->items()
             ->with($relations)
             ->whereNull('completed_at')
@@ -59,15 +59,17 @@ class ListItemController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        $items = match ($status) {
-            'active' => $active,
-            'completed' => $completed,
-            default => $active->concat($completed),
-        };
-
         return response()->json([
             'success' => true,
-            'data' => $items->map(fn (ListItem $item) => $this->presentItem($item))->all(),
+            'data' => [
+                'list_id' => $list->id,
+                'counts' => [
+                    'active' => $active->count(),
+                    'completed' => $completed->count(),
+                ],
+                'active' => $active->map(fn (ListItem $item) => $this->presentItem($item))->all(),
+                'completed' => $completed->map(fn (ListItem $item) => $this->presentItem($item))->all(),
+            ],
         ]);
     }
 
@@ -102,22 +104,6 @@ class ListItemController extends Controller
             'success' => true,
             'data' => $this->presentItem($item),
         ], 201);
-    }
-
-    public function show(Request $request, HouseholdList $list, ListItem $item): JsonResponse
-    {
-        $resolved = $this->resolveItem($request->user(), $list, $item);
-
-        if ($resolved === null) {
-            return $this->itemNotFound();
-        }
-
-        $resolved->load(['creator', 'completer', 'expense.sourceWallet', 'expense.category']);
-
-        return response()->json([
-            'success' => true,
-            'data' => $this->presentItem($resolved),
-        ]);
     }
 
     public function update(UpdateListItemRequest $request, HouseholdList $list, ListItem $item): JsonResponse
@@ -385,64 +371,15 @@ class ListItemController extends Controller
             return $this->itemNotFound();
         }
 
-        if ($list->isArchived()) {
-            return $this->listArchived('List is archived; Expense creation disallowed.');
-        }
-
         if (! $this->isOwner($request->user(), $household)) {
             return $this->error('FORBIDDEN', 'Only household owners can create Expenses.', 403);
         }
 
-        if (! $item->isCompleted()) {
-            return $this->error(
-                'LIST_ITEM_NOT_COMPLETED',
-                'Item must be completed before creating Expense.',
-                409,
-            );
-        }
-
-        // Expense is idempotent-200: a retry returns the existing row.
-        $existing = $item->expense()->with(['sourceWallet', 'category'])->first();
-
-        if ($existing !== null) {
-            return response()->json([
-                'success' => true,
-                'data' => $this->presentExpense($existing),
-                'info' => 'Expense already exists for this item. Klik generate untuk detail.',
-            ]);
-        }
-
         $validated = $request->validated();
-        $actualPrice = array_key_exists('actual_price', $validated)
-            ? $validated['actual_price']
-            : $item->actual_price;
-
-        if ($actualPrice === null || (float) $actualPrice <= 0) {
-            return $this->error(
-                'LIST_ITEM_ACTUAL_PRICE_REQUIRED',
-                'Actual price is required for Expense and must be > 0.',
-                422,
-            );
-        }
-
-        $wallet = $this->resolveWallet($household, $validated['wallet_id'] ?? null);
-
-        if ($wallet === null) {
-            return $this->error('WALLET_NOT_FOUND', 'No active wallet found for household.', 404);
-        }
-
-        $category = $this->resolveCategory($household, $validated['category_id'] ?? null);
-
-        if ($category === false) {
-            return $this->error('CATEGORY_TYPE_MISMATCH', 'Category must be an expense category.', 422);
-        }
-
-        if ($category === null && array_key_exists('category_id', $validated) && $validated['category_id'] !== null) {
-            return $this->error('CATEGORY_NOT_FOUND', 'Category not found.', 404);
-        }
 
         try {
-            $expense = DB::transaction(function () use ($list, $item, $household, $wallet, $category, $validated, $actualPrice): Transaction {
+            $result = DB::transaction(function () use ($list, $item, $household, $validated): array {
+                // Lock order per contract §8.4: list -> item -> wallet.
                 /** @var HouseholdList $lockedList */
                 $lockedList = HouseholdList::query()
                     ->whereKey($list->id)
@@ -456,23 +393,61 @@ class ListItemController extends Controller
                     ->lockForUpdate()
                     ->firstOrFail();
 
-                /** @var Wallet $lockedWallet */
-                $lockedWallet = Wallet::query()
-                    ->whereKey($wallet->id)
-                    ->lockForUpdate()
-                    ->firstOrFail();
+                if ($lockedList->archived_at !== null) {
+                    return ['error' => 'archived'];
+                }
 
-                $existing = $lockedItem->expense()->first();
+                if (! $lockedItem->isCompleted()) {
+                    return ['error' => 'not_completed'];
+                }
+
+                // Existing Expense wins over every input check: a retry
+                // must return the stored transaction, never a second one.
+                $existing = $lockedItem->expense()->with(['sourceWallet', 'category'])->first();
 
                 if ($existing !== null) {
-                    return $existing;
+                    return ['created' => false, 'expense' => $existing, 'item' => $lockedItem];
+                }
+
+                // Amount is always derived from actual_price. A payload
+                // value overrides the snapshot atomically inside this
+                // transaction; the client never supplies amount.
+                $actualPrice = array_key_exists('actual_price', $validated)
+                    ? $validated['actual_price']
+                    : $lockedItem->actual_price;
+
+                $amount = $this->normalizePositiveAmount($actualPrice);
+
+                if ($amount === null) {
+                    return ['error' => 'actual_price_required'];
+                }
+
+                $category = $this->resolveCategory($household, $validated['category_id'] ?? null);
+
+                if ($category === false) {
+                    return ['error' => 'category_type_mismatch'];
+                }
+
+                if ($category === null && array_key_exists('category_id', $validated) && $validated['category_id'] !== null) {
+                    return ['error' => 'category_not_found'];
+                }
+
+                /** @var Wallet|null $lockedWallet */
+                $lockedWallet = Wallet::query()
+                    ->where('household_id', $household->id)
+                    ->whereKey($validated['wallet_id'])
+                    ->where('is_active', true)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($lockedWallet === null) {
+                    return ['error' => 'wallet_not_found'];
                 }
 
                 $balance = $this->wallets->balanceFor($lockedWallet);
-                $amount = number_format((float) $actualPrice, 2, '.', '');
 
                 if (LedgerMath::compare($balance, $amount) < 0) {
-                    throw new \RuntimeException('INSUFFICIENT_FUNDS');
+                    return ['error' => 'insufficient_funds'];
                 }
 
                 $expense = Transaction::create([
@@ -481,7 +456,7 @@ class ListItemController extends Controller
                     'wallet_id' => $lockedWallet->id,
                     'type' => Transaction::TYPE_EXPENSE,
                     'amount' => $amount,
-                    'occurred_on' => $validated['occurred_on'] ?? now()->toDateString(),
+                    'occurred_on' => $validated['occurred_on'] ?? PeriodBounds::businessToday(),
                     'description' => $lockedItem->title,
                     'source_type' => ListItem::class,
                     'source_id' => $lockedItem->id,
@@ -494,14 +469,8 @@ class ListItemController extends Controller
 
                 $lockedList->touch();
 
-                return $expense;
+                return ['created' => true, 'expense' => $expense, 'item' => $lockedItem];
             });
-        } catch (\RuntimeException $exception) {
-            if ($exception->getMessage() === 'INSUFFICIENT_FUNDS') {
-                return $this->error('INSUFFICIENT_FUNDS', 'Insufficient wallet balance for this expense.', 422);
-            }
-
-            throw $exception;
         } catch (QueryException $exception) {
             // The partial unique index is the final guard against two
             // concurrent writers. The failed transaction is rolled back
@@ -509,22 +478,24 @@ class ListItemController extends Controller
             $existing = $item->expense()->with(['sourceWallet', 'category'])->first();
 
             if ($existing !== null) {
-                return response()->json([
-                    'success' => true,
-                    'data' => $this->presentExpense($existing),
-                    'info' => 'Expense already exists for this item. Klik generate untuk detail.',
-                ]);
+                $item->refresh();
+
+                return $this->expenseResponse($existing, $item, false);
             }
 
             throw $exception;
         }
 
-        $expense->load(['sourceWallet', 'category']);
-
-        return response()->json([
-            'success' => true,
-            'data' => $this->presentExpense($expense),
-        ], 201);
+        return match ($result['error'] ?? null) {
+            'archived' => $this->listArchived('List is archived; Expense creation disallowed.'),
+            'not_completed' => $this->error('LIST_ITEM_NOT_COMPLETED', 'Item must be completed before creating Expense.', 409),
+            'actual_price_required' => $this->error('LIST_ITEM_ACTUAL_PRICE_REQUIRED', 'Actual price is required for Expense and must be > 0.', 422),
+            'category_type_mismatch' => $this->error('CATEGORY_TYPE_MISMATCH', 'Category must be an expense category.', 422),
+            'category_not_found' => $this->error('CATEGORY_NOT_FOUND', 'Category not found.', 404),
+            'wallet_not_found' => $this->error('WALLET_NOT_FOUND', 'Wallet not found or inactive.', 404),
+            'insufficient_funds' => $this->error('INSUFFICIENT_FUNDS', 'Insufficient wallet balance for this expense.', 422),
+            default => $this->expenseResponse($result['expense'], $result['item'], (bool) $result['created']),
+        };
     }
 
     private function resolveHousehold(?User $user): ?Household
@@ -570,22 +541,20 @@ class ListItemController extends Controller
             ->exists();
     }
 
-    private function resolveWallet(Household $household, ?string $walletId): ?Wallet
+    /**
+     * Exact positive amount from the item snapshot or payload override.
+     * Returns null for missing, non-numeric, or <= 0 values so the caller
+     * can surface LIST_ITEM_ACTUAL_PRICE_REQUIRED.
+     */
+    private function normalizePositiveAmount(mixed $value): ?string
     {
-        if ($walletId !== null) {
-            return Wallet::query()
-                ->where('household_id', $household->id)
-                ->whereKey($walletId)
-                ->where('is_active', true)
-                ->first();
+        if ($value === null || $value === '' || ! is_numeric($value)) {
+            return null;
         }
 
-        return Wallet::query()
-            ->where('household_id', $household->id)
-            ->where('is_active', true)
-            ->orderBy('created_at')
-            ->orderBy('id')
-            ->first();
+        $amount = number_format((float) $value, 2, '.', '');
+
+        return LedgerMath::compare($amount, '0.00') > 0 ? $amount : null;
     }
 
     /**
@@ -645,9 +614,6 @@ class ListItemController extends Controller
             'estimated_price' => $item->estimated_price,
             'actual_price' => $item->actual_price,
             'status' => $item->status(),
-            // Kept as an additive compatibility alias for older clients
-            // and the legacy PostgreSQL suite; contract uses `status`.
-            'is_completed' => $item->isCompleted(),
             'completed_at' => $item->completed_at,
             'completed_by' => $this->presentUser($item->completer),
             'created_by' => $this->presentUser($item->creator),
@@ -693,19 +659,39 @@ class ListItemController extends Controller
         ];
     }
 
-    private function presentExpense(Transaction $transaction): array
+    /**
+     * Contract §10.7: both the created and idempotent paths return the
+     * same envelope, `{created, expense: TransactionItem, item: Item}`.
+     */
+    private function expenseResponse(Transaction $expense, ListItem $item, bool $created): JsonResponse
     {
+        $expense->loadMissing(['category', 'sourceWallet', 'destinationWallet', 'source']);
+        $item->loadMissing(['creator', 'completer', 'expense.sourceWallet', 'expense.category']);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'created' => $created,
+                'expense' => $this->presentTransaction($expense),
+                'item' => $this->presentItem($item),
+            ],
+        ], $created ? 201 : 200);
+    }
+
+    /**
+     * @return array{id: string, name: string, type: string, is_active: bool}|null
+     */
+    private function presentWalletLink(?Wallet $wallet): ?array
+    {
+        if ($wallet === null) {
+            return null;
+        }
+
         return [
-            'id' => $transaction->id,
-            'type' => $transaction->type,
-            'amount' => $transaction->amount,
-            'occurred_on' => $transaction->occurred_on?->format('Y-m-d'),
-            'wallet_id' => $transaction->wallet_id,
-            'category_id' => $transaction->category_id,
-            'source_type' => $transaction->source_type,
-            'source_id' => $transaction->source_id,
-            'description' => $transaction->description,
-            'household_id' => $transaction->household_id,
+            'id' => $wallet->id,
+            'name' => $wallet->name,
+            'type' => $wallet->type,
+            'is_active' => (bool) $wallet->is_active,
         ];
     }
 

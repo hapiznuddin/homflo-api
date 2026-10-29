@@ -7,10 +7,12 @@ use App\Exceptions\CategoryNotFoundException;
 use App\Exceptions\CategoryTypeMismatchException;
 use App\Exceptions\InsufficientFundsException;
 use App\Exceptions\InvalidTransferException;
+use App\Exceptions\ListExpenseLockedException;
 use App\Exceptions\WalletNotFoundException;
 use App\Models\Bill;
 use App\Models\Category;
 use App\Models\Household;
+use App\Models\ListItem;
 use App\Models\Transaction;
 use App\Models\Wallet;
 use App\Repositories\Contracts\CategoryRepositoryInterface;
@@ -117,6 +119,12 @@ class TransactionService
             throw new BillPaymentImmutableException;
         }
 
+        // List item expenses are immutable too (contract §8.5). The guard
+        // reads the persistent source_type column, never the payload.
+        if ($transaction->source_type === ListItem::class) {
+            throw new ListExpenseLockedException;
+        }
+
         $type = $data['type'] ?? $transaction->type;
         $categoryId = array_key_exists('category_id', $data) ? $data['category_id'] : $transaction->category_id;
 
@@ -194,6 +202,10 @@ class TransactionService
         // guard as change(), on the persistent source_type column.
         if ($transaction->source_type === Bill::class) {
             throw new BillPaymentImmutableException;
+        }
+
+        if ($transaction->source_type === ListItem::class) {
+            throw new ListExpenseLockedException;
         }
 
         $old = $this->postingOf(
