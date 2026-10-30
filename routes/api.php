@@ -19,17 +19,28 @@ use App\Http\Controllers\Api\PasswordController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\PropertyController;
 use App\Http\Controllers\Api\TransactionController;
+use App\Http\Controllers\Api\UserPreferenceController;
 use App\Http\Controllers\Api\VehicleController;
 use App\Http\Controllers\Api\VehicleMaintenanceController;
 use App\Http\Controllers\Api\VehicleObligationController;
 use App\Http\Controllers\Api\WalletController;
 use Illuminate\Support\Facades\Route;
 
+// A route-bound household that does not exist keeps the same masking
+// envelope as cross-household access, so clients handle one code.
+$householdMissing = fn () => response()->json([
+    'success' => false,
+    'error' => [
+        'code' => 'HOUSEHOLD_NOT_FOUND',
+        'message' => 'Household not found.',
+    ],
+], 404);
+
 // Route::get('/user', function (Request $request) {
 //     return $request->user();
 // })->middleware('auth:sanctum');
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware('auth:sanctum')->group(function () use ($householdMissing) {
     Route::get('/me', MeController::class);
 
     // Household catalogue reads are available to any household member,
@@ -109,6 +120,23 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/password/change', [PasswordController::class, 'change']);
     Route::get('/invitations', [InvitationController::class, 'index']);
+
+    // Per-user application preferences. Account data, not shared household
+    // data, so no `verified` gate: the controller only ever reads/writes the
+    // authenticated user's own row.
+    Route::get('/preferences', [UserPreferenceController::class, 'show']);
+    Route::patch('/preferences', [UserPreferenceController::class, 'update']);
+
+    // Owner-side invitation list is a read: any authenticated member passes
+    // policy, then ownership is checked in the controller (member -> 403,
+    // non-member -> 404). No `verified` gate, like the member list.
+    Route::get('/households/{household}/invitations', [HouseholdInvitationController::class, 'index'])
+        ->missing($householdMissing);
+
+    // Switching the active household only moves the user's own pointer. It
+    // never mutates shared household data, so it needs no `verified` gate.
+    Route::post('/households/{household}/activate', [HouseholdController::class, 'activate'])
+        ->missing($householdMissing);
     Route::post('/email/verification-notification', [EmailVerificationController::class, 'send'])
         ->middleware('throttle:6,1');
 
@@ -125,8 +153,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // Deferred mandatory verification: household mutation (other than
     // first-household creation) requires a verified email before existing
     // policy/business rules apply.
-    Route::middleware('verified')->group(function () {
-        Route::post('/households/{household}/invitations', [HouseholdInvitationController::class, 'store']);
+    Route::middleware('verified')->group(function () use ($householdMissing) {
+        // Renaming a household mutates shared data: owner-only and gated by
+        // email verification.
+        Route::patch('/households/{household}', [HouseholdController::class, 'update'])
+            ->missing($householdMissing);
+
+        Route::post('/households/{household}/invitations', [HouseholdInvitationController::class, 'store'])
+            ->middleware('throttle:10,1');
+        Route::post('/households/{household}/invitations/{invitation}/revoke', [HouseholdInvitationController::class, 'revoke'])
+            ->missing($householdMissing);
         Route::patch('/households/{household}/members/{member}', [HouseholdMemberController::class, 'update']);
         Route::delete('/households/{household}/members/{member}', [HouseholdMemberController::class, 'destroy']);
         Route::post('/invitations/{invitation}/accept', [InvitationController::class, 'accept']);

@@ -66,11 +66,13 @@ describe('financial domain foundation', function () {
         expect(Schema::hasTable('list_items'))->toBeTrue();
         expect(Schema::hasColumn('households', 'default_list_id'))->toBeTrue();
 
-        // Fourteen migrations cover every addition asserted above: the five
-        // Lists migrations plus the nine pre-Lists additions. The previous
-        // step count (9) predated the Lists foundation and silently left the
-        // recurrence/property/obligation schema in place.
-        $this->artisan('migrate:rollback', ['--step' => 14]);
+        // Eighteen migrations cover every addition asserted above: the five
+        // Lists migrations, the four Settings migrations (preferences,
+        // active household pointer + backfill, invitation revocation), plus
+        // the nine pre-Lists additions. The previous step count (9) predated
+        // the Lists foundation and silently left the recurrence/property/
+        // obligation schema in place.
+        $this->artisan('migrate:rollback', ['--step' => 18]);
 
         expect(Schema::hasTable('bill_recurrences'))->toBeFalse();
         expect(Schema::hasColumn('bills', 'recurrence_id'))->toBeFalse();

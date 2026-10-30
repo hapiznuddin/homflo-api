@@ -21,5 +21,17 @@ interface HouseholdInvitationRepositoryInterface
 
     public function countPendingForHousehold(Household $household): int;
 
+    /**
+     * Owner-side list, filtered by presentation status
+     * (pending|accepted|revoked|expired|all).
+     *
+     * @return Collection<int, HouseholdInvitation>
+     */
+    public function listForHousehold(Household $household, string $status): Collection;
+
+    public function findByIdForHousehold(Household $household, string $invitationId): ?HouseholdInvitation;
+
     public function markAsAccepted(HouseholdInvitation $invitation): HouseholdInvitation;
+
+    public function markAsRevoked(HouseholdInvitation $invitation, ?string $revokedBy): HouseholdInvitation;
 }

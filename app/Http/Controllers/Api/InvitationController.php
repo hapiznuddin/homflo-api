@@ -6,6 +6,7 @@ use App\Exceptions\AlreadyHouseholdMemberException;
 use App\Exceptions\InvitationAlreadyAcceptedException;
 use App\Exceptions\InvitationExpiredException;
 use App\Exceptions\InvitationNotFoundException;
+use App\Exceptions\InvitationRevokedException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\AcceptHouseholdInvitationRequest;
 use App\Models\HouseholdInvitation;
@@ -43,6 +44,8 @@ class InvitationController extends Controller
                     'message' => $exception->getMessage(),
                 ],
             ], 404);
+        } catch (InvitationRevokedException $exception) {
+            return $this->unprocessable('INVITATION_REVOKED', $exception->getMessage());
         } catch (InvitationAlreadyAcceptedException $exception) {
             return $this->unprocessable('INVITATION_ALREADY_ACCEPTED', $exception->getMessage());
         } catch (InvitationExpiredException $exception) {

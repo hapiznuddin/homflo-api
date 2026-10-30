@@ -233,7 +233,7 @@ describe('Household invitations', function () {
         $response->assertJsonPath('error.code', 'ALREADY_HOUSEHOLD_MEMBER');
     });
 
-    test('inviting unknown email is rejected without creating users', function () {
+    test('inviting an email without an account creates a pending invitation without creating a user', function () {
         $owner = User::factory()->create();
         $household = invSetupHousehold($owner);
 
@@ -242,8 +242,19 @@ describe('Household invitations', function () {
             ['email' => 'ghost@example.com']
         );
 
-        $response->assertStatus(422);
-        $response->assertJsonPath('error.code', 'INVITED_USER_NOT_FOUND');
+        // D14 (owner approved): an invitation may target an address that has
+        // no account yet. The invitation is bound to that email and can be
+        // claimed after registering and verifying it.
+        $response->assertStatus(201);
+        $response->assertJsonPath('data.invitation.email', 'ghost@example.com');
+        $response->assertJsonPath('data.invitation.status', 'pending');
+        expect($response->json('data.token'))->toBeString()->not->toBeEmpty();
+
+        $this->assertDatabaseHas('household_invitations', [
+            'household_id' => $household->id,
+            'email' => 'ghost@example.com',
+            'status' => 'pending',
+        ]);
         expect(User::where('email', 'ghost@example.com')->exists())->toBeFalse();
     });
 
@@ -519,6 +530,21 @@ describe('Household invitations', function () {
             public function listPendingForEmail(string $email): Collection
             {
                 return $this->inner->listPendingForEmail($email);
+            }
+
+            public function listForHousehold(Household $household, string $status): Collection
+            {
+                return $this->inner->listForHousehold($household, $status);
+            }
+
+            public function findByIdForHousehold(Household $household, string $invitationId): ?HouseholdInvitation
+            {
+                return $this->inner->findByIdForHousehold($household, $invitationId);
+            }
+
+            public function markAsRevoked(HouseholdInvitation $invitation, ?string $revokedBy): HouseholdInvitation
+            {
+                throw new RuntimeException('revocation failed');
             }
 
             public function markAsAccepted(HouseholdInvitation $invitation): HouseholdInvitation

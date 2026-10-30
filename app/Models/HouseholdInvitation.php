@@ -14,6 +14,11 @@ class HouseholdInvitation extends Model
 
     public const STATUS_ACCEPTED = 'accepted';
 
+    public const STATUS_REVOKED = 'revoked';
+
+    /** Derived, never stored: a pending row past its expiry. */
+    public const STATUS_EXPIRED = 'expired';
+
     protected $fillable = [
         'household_id',
         'invited_by',
@@ -22,6 +27,8 @@ class HouseholdInvitation extends Model
         'status',
         'expires_at',
         'accepted_at',
+        'revoked_at',
+        'revoked_by',
     ];
 
     protected function casts(): array
@@ -29,6 +36,7 @@ class HouseholdInvitation extends Model
         return [
             'expires_at' => 'datetime',
             'accepted_at' => 'datetime',
+            'revoked_at' => 'datetime',
         ];
     }
 
@@ -47,8 +55,39 @@ class HouseholdInvitation extends Model
         return $this->status === self::STATUS_PENDING;
     }
 
+    public function isAccepted(): bool
+    {
+        return $this->status === self::STATUS_ACCEPTED;
+    }
+
+    public function isRevoked(): bool
+    {
+        return $this->status === self::STATUS_REVOKED;
+    }
+
     public function isExpired(): bool
     {
         return $this->expires_at !== null && $this->expires_at->isPast();
+    }
+
+    /**
+     * Presentation status: stored lifecycle plus the derived `expired` state.
+     * A revoked row is never reported as expired even if its date has passed.
+     */
+    public function presentStatus(): string
+    {
+        if ($this->isRevoked()) {
+            return self::STATUS_REVOKED;
+        }
+
+        if ($this->isAccepted()) {
+            return self::STATUS_ACCEPTED;
+        }
+
+        if ($this->isExpired()) {
+            return self::STATUS_EXPIRED;
+        }
+
+        return self::STATUS_PENDING;
     }
 }

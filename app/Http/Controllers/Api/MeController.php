@@ -23,6 +23,7 @@ class MeController extends Controller
             'data' => [
                 'user' => $user,
                 'household' => $householdContext['household'],
+                'households' => $this->householdService->listHouseholdsForUser($user),
                 'onboarding' => $householdContext['onboarding'],
             ],
         ]);

@@ -48,6 +48,17 @@ class HouseholdMembershipService
             }
 
             $this->householdMembers->delete($membership);
+
+            // A removed member must never keep pointing at a household they
+            // no longer belong to. The oldest remaining membership (if any)
+            // becomes active; otherwise the user returns to onboarding.
+            $removedUser = $membership->user;
+
+            if ($removedUser !== null && $removedUser->active_household_id === $household->id) {
+                $fallback = $this->householdMembers->findPrimaryMembershipForUser($removedUser);
+                $removedUser->active_household_id = $fallback?->household_id;
+                $removedUser->save();
+            }
         });
     }
 }

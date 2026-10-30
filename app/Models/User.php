@@ -8,7 +8,9 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -40,5 +42,19 @@ class User extends Authenticatable implements MustVerifyEmail
     public function householdMemberships(): HasMany
     {
         return $this->hasMany(HouseholdMember::class);
+    }
+
+    /**
+     * Household the user is currently working in. Resolved server-side; the
+     * pointer is never accepted from client input.
+     */
+    public function activeHousehold(): BelongsTo
+    {
+        return $this->belongsTo(Household::class, 'active_household_id');
+    }
+
+    public function preferences(): HasOne
+    {
+        return $this->hasOne(UserPreference::class);
     }
 }

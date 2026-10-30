@@ -157,6 +157,16 @@ describe('POST /api/households', function () {
                 return null;
             }
 
+            public function findActiveMembershipForUser(User $user): ?HouseholdMember
+            {
+                return null;
+            }
+
+            public function listForUser(User $user): Collection
+            {
+                return new Collection;
+            }
+
             public function create(array $data): HouseholdMember
             {
                 throw new RuntimeException('membership failed');

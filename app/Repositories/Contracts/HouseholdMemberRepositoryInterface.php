@@ -11,6 +11,19 @@ interface HouseholdMemberRepositoryInterface
 {
     public function findPrimaryMembershipForUser(User $user): ?HouseholdMember;
 
+    /**
+     * Membership backing the user's active household pointer. Falls back to
+     * the oldest membership when the pointer is null or stale.
+     */
+    public function findActiveMembershipForUser(User $user): ?HouseholdMember;
+
+    /**
+     * Every membership of the user, ordered deterministically.
+     *
+     * @return Collection<int, HouseholdMember>
+     */
+    public function listForUser(User $user): Collection;
+
     public function create(array $data): HouseholdMember;
 
     /**

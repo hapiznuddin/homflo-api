@@ -12,10 +12,46 @@ class HouseholdMemberRepository implements HouseholdMemberRepositoryInterface
 {
     public function findPrimaryMembershipForUser(User $user): ?HouseholdMember
     {
+        // Deterministic: the oldest membership wins, with the membership id
+        // as tie-break. Never rely on physical row order.
         return HouseholdMember::query()
             ->with('household')
             ->where('user_id', $user->id)
+            ->orderBy('created_at')
+            ->orderBy('id')
             ->first();
+    }
+
+    public function findActiveMembershipForUser(User $user): ?HouseholdMember
+    {
+        $activeHouseholdId = $user->active_household_id;
+
+        if ($activeHouseholdId !== null) {
+            $active = HouseholdMember::query()
+                ->with('household')
+                ->where('user_id', $user->id)
+                ->where('household_id', $activeHouseholdId)
+                ->first();
+
+            if ($active !== null) {
+                return $active;
+            }
+        }
+
+        return $this->findPrimaryMembershipForUser($user);
+    }
+
+    /**
+     * @return Collection<int, HouseholdMember>
+     */
+    public function listForUser(User $user): Collection
+    {
+        return HouseholdMember::query()
+            ->with('household')
+            ->where('user_id', $user->id)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
     }
 
     public function create(array $data): HouseholdMember

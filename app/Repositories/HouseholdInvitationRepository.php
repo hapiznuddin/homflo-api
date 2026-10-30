@@ -43,11 +43,56 @@ class HouseholdInvitationRepository implements HouseholdInvitationRepositoryInte
             ->get();
     }
 
+    /**
+     * @return Collection<int, HouseholdInvitation>
+     */
+    public function listForHousehold(Household $household, string $status): Collection
+    {
+        $query = HouseholdInvitation::query()
+            ->with('inviter')
+            ->where('household_id', $household->id);
+
+        match ($status) {
+            'accepted' => $query->where('status', HouseholdInvitation::STATUS_ACCEPTED),
+            'revoked' => $query->where('status', HouseholdInvitation::STATUS_REVOKED),
+            'expired' => $query->where('status', HouseholdInvitation::STATUS_PENDING)
+                ->where('expires_at', '<=', now()),
+            'pending' => $query->where('status', HouseholdInvitation::STATUS_PENDING)
+                ->where('expires_at', '>', now()),
+            default => null,
+        };
+
+        return $query
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get();
+    }
+
+    public function findByIdForHousehold(Household $household, string $invitationId): ?HouseholdInvitation
+    {
+        return HouseholdInvitation::query()
+            ->with('inviter')
+            ->where('household_id', $household->id)
+            ->where('id', $invitationId)
+            ->first();
+    }
+
     public function markAsAccepted(HouseholdInvitation $invitation): HouseholdInvitation
     {
         $invitation->update([
             'status' => HouseholdInvitation::STATUS_ACCEPTED,
             'accepted_at' => now(),
+        ]);
+
+        return $invitation->refresh();
+    }
+
+    public function markAsRevoked(HouseholdInvitation $invitation, ?string $revokedBy): HouseholdInvitation
+    {
+        $invitation->update([
+            'status' => HouseholdInvitation::STATUS_REVOKED,
+            'revoked_at' => $invitation->revoked_at ?? now(),
+            'revoked_by' => $invitation->revoked_by ?? $revokedBy,
         ]);
 
         return $invitation->refresh();
