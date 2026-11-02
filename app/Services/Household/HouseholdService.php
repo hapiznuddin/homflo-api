@@ -7,16 +7,25 @@ use App\Exceptions\HouseholdNotFoundException;
 use App\Models\Household;
 use App\Models\HouseholdMember;
 use App\Models\User;
+use App\Models\Wallet;
 use App\Repositories\Contracts\HouseholdMemberRepositoryInterface;
 use App\Repositories\Contracts\HouseholdRepositoryInterface;
+use App\Services\Finance\WalletService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class HouseholdService
 {
+    /**
+     * Every new household starts with exactly one liquid wallet so Money,
+     * Bills, and List expenses have a valid posting target immediately.
+     */
+    private const DEFAULT_WALLET_NAME = 'Cash';
+
     public function __construct(
         private readonly HouseholdMemberRepositoryInterface $householdMembers,
         private readonly HouseholdRepositoryInterface $households,
+        private readonly WalletService $wallets,
     ) {}
 
     /**
@@ -80,21 +89,41 @@ class HouseholdService
         }
 
         DB::transaction(function () use ($user, $name) {
+            // Serialize concurrent creation attempts for the same user.
+            // PostgreSQL locks the user row; the membership re-check below
+            // then sees any household committed by the winning request.
+            // SQLite serializes writes at the database level.
+            $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+
+            if ($this->householdMembers->findPrimaryMembershipForUser($lockedUser) !== null) {
+                throw new HouseholdAlreadyExistsException;
+            }
+
             $household = $this->households->create([
                 'name' => $name,
-                'created_by' => $user->id,
+                'created_by' => $lockedUser->id,
+            ]);
+
+            // Provision the default wallet through the existing WalletService
+            // so normalization, activation, and duplicate-name rules stay in
+            // one place. The unique (household_id, name) index is the final
+            // guard against a second Cash wallet in this household.
+            $this->wallets->record($household, [
+                'name' => self::DEFAULT_WALLET_NAME,
+                'type' => Wallet::TYPE_CASH,
+                'opening_balance' => 0,
             ]);
 
             $this->householdMembers->create([
                 'household_id' => $household->id,
-                'user_id' => $user->id,
+                'user_id' => $lockedUser->id,
                 'role' => 'owner',
             ]);
 
             // The first household becomes active immediately so onboarding
             // and every subsequent read agree on the same household.
-            $user->active_household_id = $household->id;
-            $user->save();
+            $lockedUser->active_household_id = $household->id;
+            $lockedUser->save();
         });
 
         return $this->householdContextWithList($user->refresh());
