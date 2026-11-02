@@ -162,35 +162,36 @@ class HouseholdInvitationService
             throw new InvitationNotFoundException;
         }
 
-        if ($invitation->isRevoked()) {
-            throw new InvitationRevokedException;
-        }
-
-        if (! $invitation->isPending()) {
-            throw new InvitationAlreadyAcceptedException;
-        }
-
-        if ($invitation->isExpired()) {
-            throw new InvitationExpiredException;
-        }
+        $this->assertAcceptable($invitation);
 
         try {
             $membership = DB::transaction(function () use ($invitation, $user) {
-                if ($this->householdMembers->findByHouseholdAndUser($invitation->household, $user) !== null) {
+                // Serialize two accept requests on the invitation row
+                // itself: the loser re-runs the status checks against the
+                // locked state before touching memberships.
+                $locked = $this->invitations->findByIdForUpdate($invitation->id);
+
+                if ($locked === null) {
+                    throw new InvitationNotFoundException;
+                }
+
+                $this->assertAcceptable($locked);
+
+                if ($this->householdMembers->findByHouseholdAndUser($locked->household, $user) !== null) {
                     throw new AlreadyHouseholdMemberException;
                 }
 
                 $created = $this->householdMembers->create([
-                    'household_id' => $invitation->household_id,
+                    'household_id' => $locked->household_id,
                     'user_id' => $user->id,
                     'role' => 'member',
                 ]);
 
-                $this->invitations->markAsAccepted($invitation);
+                $this->invitations->markAsAccepted($locked);
 
                 // Accepting switches the active household: the user joined
                 // this household on purpose and must not need a manual switch.
-                $user->active_household_id = $invitation->household_id;
+                $user->active_household_id = $locked->household_id;
                 $user->save();
 
                 return $created;
@@ -215,6 +216,30 @@ class HouseholdInvitationService
             'created_at' => $membership->created_at,
             'updated_at' => $membership->updated_at,
         ];
+    }
+
+    /**
+     * Shared terminal-state gate for acceptance. The invitation row may be
+     * checked once unlocked (early exit) and again after locking inside
+     * the transaction, so both callers must raise the same error contract.
+     *
+     * @throws InvitationRevokedException
+     * @throws InvitationAlreadyAcceptedException
+     * @throws InvitationExpiredException
+     */
+    private function assertAcceptable(HouseholdInvitation $invitation): void
+    {
+        if ($invitation->isRevoked()) {
+            throw new InvitationRevokedException;
+        }
+
+        if (! $invitation->isPending()) {
+            throw new InvitationAlreadyAcceptedException;
+        }
+
+        if ($invitation->isExpired()) {
+            throw new InvitationExpiredException;
+        }
     }
 
     /**

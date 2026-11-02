@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\InvitationAlreadyAcceptedException;
 use App\Models\Household;
 use App\Models\HouseholdInvitation;
 use App\Models\HouseholdMember;
@@ -7,6 +8,7 @@ use App\Models\User;
 use App\Repositories\Contracts\HouseholdInvitationRepositoryInterface;
 use App\Services\Household\HouseholdInvitationService;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\UniqueConstraintViolationException;
 
 function invSetupHousehold(User $owner, string $name = 'Test Home'): Household
 {
@@ -474,6 +476,229 @@ describe('Household invitations', function () {
             ->count())->toBe(1);
     });
 
+    test('member of another household can accept invitation into a new household', function () {
+        $otherOwner = User::factory()->create();
+        $ownHome = invSetupHousehold($otherOwner, 'Rumah Sendiri');
+        $invited = $otherOwner;
+
+        $owner = User::factory()->create();
+        $targetHome = invSetupHousehold($owner, 'Rumah Ibu');
+
+        $created = invInvite($this, $owner, $targetHome, $invited->email);
+
+        $response = $this->actingAs($invited)->postJson(
+            "/api/invitations/{$created['id']}/accept",
+            ['token' => $created['token']]
+        );
+
+        $response->assertStatus(201);
+        $response->assertJsonPath('data.role', 'member');
+
+        // Old membership persists: multi-membership, not a move.
+        expect(HouseholdMember::query()->where('user_id', $invited->id)->count())->toBe(2);
+        $this->assertDatabaseHas('household_members', [
+            'household_id' => $ownHome->id,
+            'user_id' => $invited->id,
+            'role' => 'owner',
+        ]);
+        $this->assertDatabaseHas('household_members', [
+            'household_id' => $targetHome->id,
+            'user_id' => $invited->id,
+            'role' => 'member',
+        ]);
+
+        // D8: the accepted household becomes the active pointer...
+        expect($invited->refresh()->active_household_id)->toBe($targetHome->id);
+        // ...without disturbing the original household's data.
+        expect($ownHome->refresh()->name)->toBe('Rumah Sendiri');
+    });
+
+    test('user with multiple households can accept an invitation to a third household', function () {
+        $invited = User::factory()->create();
+        $homeOne = invSetupHousehold($invited, 'Rumah Satu');
+        $secondMembership = HouseholdMember::create([
+            'household_id' => Household::create([
+                'name' => 'Rumah Dua',
+                'created_by' => $invited->id,
+            ])->id,
+            'user_id' => $invited->id,
+            'role' => 'owner',
+        ]);
+
+        $owner = User::factory()->create();
+        $targetHome = invSetupHousehold($owner, 'Rumah Target');
+
+        $created = invInvite($this, $owner, $targetHome, $invited->email);
+
+        $this->actingAs($invited)->postJson(
+            "/api/invitations/{$created['id']}/accept",
+            ['token' => $created['token']]
+        )->assertStatus(201);
+
+        $membershipHouseholds = HouseholdMember::query()
+            ->where('user_id', $invited->id)
+            ->orderBy('created_at')
+            ->get()
+            ->pluck(['household_id'])
+            ->values();
+
+        expect($membershipHouseholds)->toHaveCount(3)
+            ->and($membershipHouseholds)->toContain($homeOne->id)
+            ->and($membershipHouseholds)->toContain($secondMembership->household_id)
+            ->and($membershipHouseholds)->toContain($targetHome->id)
+            ->and($invited->refresh()->active_household_id)->toBe($targetHome->id);
+    });
+
+    test('unique constraint on household_members rejects duplicate rows', function () {
+        $owner = User::factory()->create();
+        $household = invSetupHousehold($owner);
+        $member = User::factory()->create();
+
+        HouseholdMember::create([
+            'household_id' => $household->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
+
+        $duplicate = fn () => HouseholdMember::create([
+            'household_id' => $household->id,
+            'user_id' => $member->id,
+            'role' => 'member',
+        ]);
+
+        // PostgreSQL aborts the surrounding transaction after a constraint
+        // violation, so the row count is asserted before the final attempt;
+        // the exception itself proves the duplicate was not persisted.
+        expect(HouseholdMember::query()
+            ->where('household_id', $household->id)
+            ->where('user_id', $member->id)
+            ->count())->toBe(1);
+        expect($duplicate)->toThrow(UniqueConstraintViolationException::class);
+    });
+
+    test('failed acceptance does not change the active household', function () {
+        $invited = User::factory()->create();
+        $ownHome = invSetupHousehold($invited, 'Rumah Aktif');
+        $invited->forceFill(['active_household_id' => $ownHome->id])->save();
+
+        $owner = User::factory()->create();
+        $targetHome = invSetupHousehold($owner, 'Rumah Undangan');
+
+        $created = invInvite($this, $owner, $targetHome, $invited->email);
+
+        HouseholdInvitation::whereKey($created['id'])->update([
+            'expires_at' => now()->subDay(),
+        ]);
+
+        $response = $this->actingAs($invited)->postJson(
+            "/api/invitations/{$created['id']}/accept",
+            ['token' => $created['token']]
+        );
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('error.code', 'INVITATION_EXPIRED');
+
+        expect($invited->refresh()->active_household_id)->toBe($ownHome->id)
+            ->and(HouseholdMember::query()
+                ->where('household_id', $targetHome->id)
+                ->where('user_id', $invited->id)
+                ->count())->toBe(0);
+    });
+
+    test('a racing accept that loses the invitation-state re-check creates no duplicate', function () {
+        $owner = User::factory()->create();
+        $household = invSetupHousehold($owner);
+        $invited = User::factory()->create();
+
+        $created = invInvite($this, $owner, $household, $invited->email);
+        $invitation = HouseholdInvitation::find($created['id']);
+
+        $inner = app(HouseholdInvitationRepositoryInterface::class);
+
+        // Simulate the rival request committing between this request's
+        // unlocked read and the locked re-read inside the transaction. The
+        // snapshot is mutated in memory only: a real write here would be
+        // rolled back with this transaction, so the "committed" rival state
+        // is expressed through the returned row's status.
+        $racingInvitations = new class($inner) implements HouseholdInvitationRepositoryInterface
+        {
+            public function __construct(private readonly HouseholdInvitationRepositoryInterface $inner) {}
+
+            public function create(array $data): HouseholdInvitation
+            {
+                return $this->inner->create($data);
+            }
+
+            public function findById(string $id): ?HouseholdInvitation
+            {
+                return $this->inner->findById($id);
+            }
+
+            public function findByIdForUpdate(string $id): ?HouseholdInvitation
+            {
+                $locked = $this->inner->findByIdForUpdate($id);
+
+                if ($locked !== null) {
+                    $locked->status = HouseholdInvitation::STATUS_ACCEPTED;
+                    $locked->accepted_at = now();
+                }
+
+                return $locked;
+            }
+
+            public function findPendingByHouseholdAndEmail(Household $household, string $email): ?HouseholdInvitation
+            {
+                return $this->inner->findPendingByHouseholdAndEmail($household, $email);
+            }
+
+            public function listPendingForEmail(string $email): Collection
+            {
+                return $this->inner->listPendingForEmail($email);
+            }
+
+            public function listForHousehold(Household $household, string $status): Collection
+            {
+                return $this->inner->listForHousehold($household, $status);
+            }
+
+            public function findByIdForHousehold(Household $household, string $invitationId): ?HouseholdInvitation
+            {
+                return $this->inner->findByIdForHousehold($household, $invitationId);
+            }
+
+            public function markAsRevoked(HouseholdInvitation $invitation, ?string $revokedBy): HouseholdInvitation
+            {
+                return $this->inner->markAsRevoked($invitation, $revokedBy);
+            }
+
+            public function markAsAccepted(HouseholdInvitation $invitation): HouseholdInvitation
+            {
+                return $this->inner->markAsAccepted($invitation);
+            }
+
+            public function countPendingForHousehold(Household $household): int
+            {
+                return $this->inner->countPendingForHousehold($household);
+            }
+        };
+
+        app()->instance(HouseholdInvitationRepositoryInterface::class, $racingInvitations);
+
+        $service = app(HouseholdInvitationService::class);
+
+        expect(fn () => $service->accept($invited, $created['id'], $created['token']))
+            ->toThrow(InvitationAlreadyAcceptedException::class);
+
+        // The losing request wrote nothing: no membership, and the
+        // invitation row itself is untouched (still pending on disk).
+        expect(HouseholdMember::query()
+            ->where('household_id', $household->id)
+            ->where('user_id', $invited->id)
+            ->count())->toBe(0);
+        expect(HouseholdInvitation::find($created['id'])->status)
+            ->toBe(HouseholdInvitation::STATUS_PENDING);
+    });
+
     test('client user_id cannot change accept target user', function () {
         $owner = User::factory()->create();
         $household = invSetupHousehold($owner);
@@ -520,6 +745,11 @@ describe('Household invitations', function () {
             public function findById(string $id): ?HouseholdInvitation
             {
                 return $this->inner->findById($id);
+            }
+
+            public function findByIdForUpdate(string $id): ?HouseholdInvitation
+            {
+                return $this->inner->findByIdForUpdate($id);
             }
 
             public function findPendingByHouseholdAndEmail(Household $household, string $email): ?HouseholdInvitation

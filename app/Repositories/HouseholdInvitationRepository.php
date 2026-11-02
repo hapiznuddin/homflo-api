@@ -19,6 +19,14 @@ class HouseholdInvitationRepository implements HouseholdInvitationRepositoryInte
         return HouseholdInvitation::query()->find($id);
     }
 
+    public function findByIdForUpdate(string $id): ?HouseholdInvitation
+    {
+        return HouseholdInvitation::query()
+            ->whereKey($id)
+            ->lockForUpdate()
+            ->first();
+    }
+
     public function findPendingByHouseholdAndEmail(Household $household, string $email): ?HouseholdInvitation
     {
         return HouseholdInvitation::query()

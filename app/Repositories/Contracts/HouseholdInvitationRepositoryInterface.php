@@ -12,6 +12,12 @@ interface HouseholdInvitationRepositoryInterface
 
     public function findById(string $id): ?HouseholdInvitation;
 
+    /**
+     * Acceptance path only: re-read the row with a row-level lock so two
+     * concurrent accept requests serialize before any state is written.
+     */
+    public function findByIdForUpdate(string $id): ?HouseholdInvitation;
+
     public function findPendingByHouseholdAndEmail(Household $household, string $email): ?HouseholdInvitation;
 
     /**
