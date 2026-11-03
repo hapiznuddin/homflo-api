@@ -17,7 +17,7 @@ class DashboardService
      *
      * @var list<string>
      */
-    private const UNSUPPORTED_DOMAINS = ['transactions', 'budgets', 'bills', 'maintenance'];
+// empty
 
     public function __construct(
         private readonly HouseholdMemberRepositoryInterface $householdMembers,
@@ -79,7 +79,7 @@ class DashboardService
             'upcoming_bills' => [],
             'recent_transactions' => [],
             'maintenance' => [],
-            'meta' => ['unsupported_domains' => self::UNSUPPORTED_DOMAINS],
+"            'meta' => {}"
         ];
     }
 }

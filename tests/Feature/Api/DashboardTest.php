@@ -68,7 +68,7 @@ describe('GET /api/dashboard', function () {
         $response->assertJsonPath('data.upcoming_bills', []);
         $response->assertJsonPath('data.recent_transactions', []);
         $response->assertJsonPath('data.maintenance', []);
-        $response->assertJsonPath('data.meta.unsupported_domains', ['transactions', 'budgets', 'bills', 'maintenance']);
+        $response->assertJsonPath('data.meta.unsupported_domains', null);
     });
 
     test('user without household receives 404 without leaking data', function () {
