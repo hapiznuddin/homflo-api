@@ -731,9 +731,11 @@ describe('Obligation type API', function () {
             'obligation_type_id' => $customType->id,
         ]);
 
+        $savepoint = databaseSavepoint();
         $this->actingAs($owner)->deleteJson("/api/obligation-types/{$customType->id}")
             ->assertStatus(422)
             ->assertJsonPath('error.code', 'OBLIGATION_TYPE_IN_USE');
+        databaseSavepointRollback($savepoint);
 
         expect(ObligationType::find($customType->id))->not->toBeNull();
         expect($obligation->refresh()->obligation_type_id)->toBe($customType->id);

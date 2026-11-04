@@ -521,9 +521,11 @@ describe('Budgets protect category deletion', function () {
         $category = bgCategory($household);
         $budget = bgRecord($household, $category);
 
+        $savepoint = databaseSavepoint();
         $this->actingAs($owner)->deleteJson("/api/categories/{$category->id}")
             ->assertStatus(422)
             ->assertJsonPath('error.code', 'CATEGORY_IN_USE');
+        databaseSavepointRollback($savepoint);
 
         expect(Category::find($category->id))->not->toBeNull();
         expect(Budget::find($budget->id))->not->toBeNull();

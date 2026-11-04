@@ -201,9 +201,11 @@ class BillRepository implements BillRepositoryInterface
         // two drivers. Matching on the shared month prefix keeps this
         // defensive check portable; the partial unique index remains the
         // fail-loud backstop either way.
+        // Phase 6 fix (PostgreSQL): substr() membutuhkan text — cast date
+        // ke text agar query valid di PostgreSQL dan tetap portable di SQLite.
         return Bill::query()
             ->where('recurrence_id', $recurrenceId)
-            ->whereRaw('substr(recurrence_period, 1, 7) = ?', [substr($periodMonth, 0, 7)])
+            ->whereRaw('substr(cast(recurrence_period as text), 1, 7) = ?', [substr($periodMonth, 0, 7)])
             ->exists();
     }
 

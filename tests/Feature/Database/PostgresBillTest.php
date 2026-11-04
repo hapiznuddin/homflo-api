@@ -168,9 +168,16 @@ describe('postgresql bill schema and constraints', function () {
             ['sort-a', '2025-12-31', '2026-01-04 00:00:00'],
         ];
 
-        // The sqlite side (default connection, migrated by the test case)
-        // gets its own foundation rows with matching structure.
-        DB::table('users')->insert([
+        // The sqlite side gets its own foundation rows with matching
+        // structure. It must target the named sqlite connection explicitly:
+        // under phpunit.pgsql.xml the default connection is pinned to pgsql,
+        // so a bare DB::table() would silently run against PostgreSQL and
+        // collide with the PG fixture rows on the shared short probe ids.
+        config(['database.connections.sqlite.database' => ':memory:']);
+        DB::purge('sqlite');
+        Artisan::call('migrate:fresh', ['--database' => 'sqlite', '--force' => true]);
+
+        DB::connection('sqlite')->table('users')->insert([
             'id' => 'sq-user',
             'username' => 'sq-b-user',
             'name' => 'SQ Bill',
@@ -179,7 +186,7 @@ describe('postgresql bill schema and constraints', function () {
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        DB::table('households')->insert([
+        DB::connection('sqlite')->table('households')->insert([
             'id' => 'sq-household',
             'name' => 'SQ Bill House',
             'created_by' => 'sq-user',
@@ -201,7 +208,7 @@ describe('postgresql bill schema and constraints', function () {
                 'household_id' => $householdId,
                 'due_date' => $dueDate,
             ]);
-            DB::table('bills')->insert($row + [
+            DB::connection('sqlite')->table('bills')->insert($row + [
                 'household_id' => 'sq-household',
                 'due_date' => $dueDate,
             ]);
@@ -222,7 +229,7 @@ describe('postgresql bill schema and constraints', function () {
         );
         $sqliteOrder = array_map(
             'trim',
-            array_column(DB::select($sortSql, ['sq-household']), 'id'),
+            array_column(DB::connection('sqlite')->select($sortSql, ['sq-household']), 'id'),
         );
 
         expect($pgOrder)->toBe(['sort-a', 'sort-b', 'sort-d', 'sort-c', 'sort-e']);

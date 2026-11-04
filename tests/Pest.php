@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /*
@@ -47,4 +48,25 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+/**
+ * PostgreSQL aborts the whole database transaction on any error — including
+ * an expected constraint violation that the test catches — while SQLite only
+ * rolls back the offending statement and keeps the transaction usable. To
+ * keep testing after such an expected rejection, open a savepoint before the
+ * risky statement and roll back to it afterwards; this recovers the transaction
+ * without discarding fixture rows created inside the test transaction.
+ */
+function databaseSavepoint(string $name = 'reset_aborted'): string
+{
+    DB::connection()->getPdo()->exec("SAVEPOINT {$name}");
+
+    return $name;
+}
+
+function databaseSavepointRollback(string $name): void
+{
+    DB::connection()->getPdo()->exec("ROLLBACK TO SAVEPOINT {$name}");
+    DB::connection()->getPdo()->exec("RELEASE SAVEPOINT {$name}");
 }

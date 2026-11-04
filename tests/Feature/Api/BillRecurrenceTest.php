@@ -275,6 +275,10 @@ describe('Bill recurrence horizon and idempotency', function () {
             ->where('recurrence_id', $recurrenceId)
             ->value('recurrence_period');
 
+        // PostgreSQL aborts the whole transaction on the expected unique
+        // violation; recover through a savepoint so the one-time inserts
+        // below still run on a usable transaction.
+        $savepoint = databaseSavepoint();
         expect(fn () => DB::table('bills')->insert([
             'id' => (string) Str::ulid(),
             'household_id' => $household->id,
@@ -286,6 +290,7 @@ describe('Bill recurrence horizon and idempotency', function () {
             'created_at' => now(),
             'updated_at' => now(),
         ]))->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // NULL recurrence keys stay distinct in both engines: any number
         // of one-time bills may share (NULL, NULL).
@@ -638,7 +643,7 @@ describe('Bill recurrence schedule changes', function () {
             'due_date' => '2026-11-01',
         ])->assertStatus(201);
 
-        expect(DB::table('bill_recurrences')->value('is_active'))->toBe(1);
+        expect((int) DB::table('bill_recurrences')->value('is_active'))->toBe(1);
         expect(DB::table('bills')->whereNotNull('recurrence_id')->count())->toBe(12);
         expect($first->refresh()->is_active)->toBeFalse();
     });

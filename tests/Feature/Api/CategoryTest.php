@@ -377,10 +377,12 @@ describe('Categories API delete rules', function () {
             ->for($category)
             ->create();
 
+        $savepoint = databaseSavepoint();
         $this->actingAs($owner)->deleteJson("/api/categories/{$category->id}")
             ->assertStatus(422)
             ->assertJsonPath('success', false)
             ->assertJsonPath('error.code', 'CATEGORY_IN_USE');
+        databaseSavepointRollback($savepoint);
 
         expect(Category::find($category->id))->not->toBeNull();
         expect(Budget::find($budget->id))->not->toBeNull();

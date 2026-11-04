@@ -1078,7 +1078,10 @@ describe('Bill payment presenter and aggregation', function () {
 
         $response = $this->actingAs($owner)->getJson('/api/dashboard')->assertOk();
         expect($response->json('data.upcoming_bills'))->toBe([]);
-        expect($response->json('data.meta.unsupported_domains'))
-            ->toBe(['transactions', 'budgets', 'bills', 'maintenance']);
+        // P1-8 menyederhanakan contract: meta tidak lagi memuat
+        // unsupported_domains; domain tanpa persistence dilaporkan sebagai
+        // array kosong. Konsisten dengan DashboardTest (data.meta.
+        // unsupported_domains => null).
+        expect($response->json('data.meta.unsupported_domains'))->toBeNull();
     });
 });

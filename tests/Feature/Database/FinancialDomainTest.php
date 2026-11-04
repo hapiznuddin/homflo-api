@@ -215,8 +215,10 @@ describe('financial domain foundation', function () {
         $category = Category::factory()->for($household)->create(['name' => 'Dapur']);
 
         // Same name in the same household is forbidden.
+        $savepoint = databaseSavepoint();
         expect(fn () => Category::factory()->for($household)->create(['name' => 'Dapur']))
             ->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // Same name in another household is allowed.
         Category::factory()->for($other)->create(['name' => 'Dapur']);
@@ -225,8 +227,10 @@ describe('financial domain foundation', function () {
         ObligationType::factory()->for($household)->create(['name' => 'Pajak Daerah']);
 
         // Custom obligation type names are unique per household.
+        $savepoint = databaseSavepoint();
         expect(fn () => ObligationType::factory()->for($household)->create(['name' => 'Pajak Daerah']))
             ->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // The same custom name may exist in another household.
         ObligationType::factory()->for($other)->create(['name' => 'Pajak Daerah']);
@@ -234,8 +238,10 @@ describe('financial domain foundation', function () {
         Budget::factory()->for($household)->for($category)->create(['year' => 2026, 'month' => 10]);
 
         // Same category + period is forbidden.
+        $savepoint = databaseSavepoint();
         expect(fn () => Budget::factory()->for($household)->for($category)->create(['year' => 2026, 'month' => 10]))
             ->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // Same category in another month is allowed.
         Budget::factory()->for($household)->for($category)->create(['year' => 2026, 'month' => 11]);
@@ -244,8 +250,10 @@ describe('financial domain foundation', function () {
         Vehicle::factory()->for($household)->create(['plate_number' => 'B 1234 ABC']);
 
         // Same plate in the same household is forbidden.
+        $savepoint = databaseSavepoint();
         expect(fn () => Vehicle::factory()->for($household)->create(['plate_number' => 'B 1234 ABC']))
             ->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // Same plate in another household is allowed.
         Vehicle::factory()->for($other)->create(['plate_number' => 'B 1234 ABC']);
@@ -394,14 +402,20 @@ describe('financial domain foundation', function () {
         $vehicleMaintenance = VehicleMaintenance::factory()->for($vehicle)->create();
 
         // A household holding transactions cannot vanish silently.
+        $savepoint = databaseSavepoint();
         expect(fn () => $household->delete())->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // A category backing a budget cannot be removed.
+        $savepoint = databaseSavepoint();
         expect(fn () => $category->delete())->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // Deleting the budget first still leaves the transactions protected.
         $budget->delete();
+        $savepoint = databaseSavepoint();
         expect(fn () => $household->delete())->toThrow(QueryException::class);
+        databaseSavepointRollback($savepoint);
 
         // Removing a category detaches (not destroys) transaction and bill history.
         $bill->delete();
