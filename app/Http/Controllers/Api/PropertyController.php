@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\IndexPropertyRequest;
 use App\Http\Requests\Api\StorePropertyRequest;
 use App\Http\Requests\Api\UpdatePropertyRequest;
 use App\Models\Household;
@@ -13,7 +14,7 @@ use Illuminate\Support\Facades\Gate;
 
 class PropertyController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(IndexPropertyRequest $request): JsonResponse
     {
         $household = app()->make('App\Services\Household\HouseholdService')
             ->resolveUserHouseholdContext($request->user());
@@ -33,7 +34,7 @@ class PropertyController extends Controller
             return $this->householdNotFound();
         }
 
-        $includeArchived = $request->query('include_archived', false);
+        $includeArchived = $request->filters()['include_archived'];
 
         $query = Property::query()
             ->where('household_id', $householdModel->id);

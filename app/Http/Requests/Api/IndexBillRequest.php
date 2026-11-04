@@ -49,8 +49,10 @@ class IndexBillRequest extends FormRequest
      */
     public function filters(): array
     {
+        $validated = $this->validated();
+
         return [
-            'include_archived' => (bool) ($this->validated()['include_archived'] ?? false),
+            'include_archived' => (bool) ($validated['include_archived'] ?? false),
         ];
     }
 }

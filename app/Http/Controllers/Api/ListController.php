@@ -13,6 +13,7 @@ use App\Services\Household\HouseholdService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 
 class ListController extends Controller
 {

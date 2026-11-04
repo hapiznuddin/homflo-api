@@ -297,6 +297,6 @@ describe('Dashboard income and net cash flow aggregation', function () {
         expect($response->json('data.financial.income_change_percent'))->toBe(0);
         expect($response->json('data.financial.budget_usage_percent'))->toBe(0);
         expect($response->json('data.budget'))->toEqual([]);
-        expect($response->json('data.meta.unsupported_domains'))->toEqual(['transactions', 'budgets', 'bills', 'maintenance']);
+        expect($response->json('data.meta'))->toBeEmpty();
     });
 });

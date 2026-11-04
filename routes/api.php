@@ -60,18 +60,18 @@ Route::middleware('auth:sanctum')->group(function () use ($householdMissing) {
     Route::get('/wallets/{wallet}', [WalletController::class, 'show']);
     Route::get('/wallets/{wallet}/adjustments', [WalletController::class, 'adjustments']);
 
+    // Budget target reads are available to any household member. Setting,
+    // changing, and removing targets mutates shared household data, so
+    // writes follow the deferred mandatory verification rule.
+    Route::get('/budgets', [BudgetController::class, 'index']);
+    Route::get('/budgets/{budget}', [BudgetController::class, 'show']);
+
     // Transaction ledger reads are available to any household member, like
     // /me and /dashboard. Recording, changing, and removing ledger rows
     // mutates shared household data, so writes follow the deferred
     // mandatory verification rule with the other household mutations.
     Route::get('/transactions', [TransactionController::class, 'index']);
     Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
-
-    // Budget target reads are available to any household member. Setting,
-    // changing, and removing targets mutates shared household data, so
-    // writes follow the deferred mandatory verification rule.
-    Route::get('/budgets', [BudgetController::class, 'index']);
-    Route::get('/budgets/{budget}', [BudgetController::class, 'show']);
 
     // Bill reads are available to any household member, like the other
     // finance reads. Payment status/amounts are derived per request from
