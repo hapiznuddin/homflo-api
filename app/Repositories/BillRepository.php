@@ -185,12 +185,19 @@ class BillRepository implements BillRepositoryInterface
 
     public function lockRecurrenceForHousehold(Household $household, string $recurrenceId): BillRecurrence
     {
-        return BillRecurrence::query()
+        $recurrence = BillRecurrence::query()
             ->with('category')
             ->where('household_id', $household->id)
             ->where('id', $recurrenceId)
             ->lockForUpdate()
             ->firstOrFail();
+
+        if (! $recurrence instanceof BillRecurrence) {
+            $recurrence = (new BillRecurrence)->newFromBuilder((array) $recurrence);
+            $recurrence->load('category');
+        }
+
+        return $recurrence;
     }
 
     public function periodExists(string $recurrenceId, string $periodMonth): bool
